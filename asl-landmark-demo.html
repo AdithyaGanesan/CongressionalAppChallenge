@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>ASL Landmark Capture — Step 1</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --line: #2b3340;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --hand-left: #4fd1c5;
+    --hand-right: #f0a35a;
+    --pose: #6e9bf7;
+    --accent: #4fd1c5;
+    --bad: #ef6a6a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none;
+  }
+  #app {
+    position: relative;
+    height: 100%;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 10px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    z-index: 3;
+  }
+  header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+  header span.step {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  #stage {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    background: #000;
+  }
+  video, canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  video { transform: scaleX(-1); }
+  canvas { transform: scaleX(-1); }
+  #hud {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .pill {
+    background: rgba(13, 17, 23, 0.75);
+    backdrop-filter: blur(4px);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 9px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .pill b { color: var(--muted); font-weight: 500; }
+  #status {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 32px;
+    font-size: 15px;
+    color: var(--muted);
+    z-index: 4;
+    background: var(--bg);
+  }
+  #status.hidden { display: none; }
+  #status button {
+    margin-top: 16px;
+    background: var(--accent);
+    color: #05221e;
+    border: none;
+    font-weight: 600;
+    font-size: 15px;
+    padding: 12px 22px;
+    border-radius: 10px;
+  }
+  footer {
+    padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    display: flex;
+    gap: 10px;
+    z-index: 3;
+  }
+  footer button {
+    flex: 1;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: #1c232c;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  footer button:active { background: #262f3a; }
+  #err {
+    color: var(--bad);
+    font-size: 13px;
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Landmark capture</h1>
+    <span class="step">Step 1 of the ASL translator pipeline</span>
+  </header>
+
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div id="hud">
+      <div class="pill"><b>FPS</b> <span id="fps">–</span></div>
+      <div class="pill"><b>Hands</b> <span id="handCount">0</span></div>
+      <div class="pill"><b>Pose</b> <span id="poseStatus">–</span></div>
+    </div>
+    <div id="status">
+      <div>
+        <div>This page turns on your camera and overlays hand and upper-body landmarks in real time, using MediaPipe running entirely on your device. Nothing is uploaded.</div>
+        <button id="startBtn">Turn on camera</button>
+        <div id="err"></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <button id="flipBtn">Flip camera</button>
+    <button id="pauseBtn" disabled>Pause</button>
+  </footer>
+</div>
+
+<script type="module">
+import {
+  HandLandmarker,
+  PoseLandmarker,
+  FilesetResolver
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("overlay");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const startBtn = document.getElementById("startBtn");
+const flipBtn = document.getElementById("flipBtn");
+const pauseBtn = document.getElementById("pauseBtn");
+const errEl = document.getElementById("err");
+const fpsEl = document.getElementById("fps");
+const handCountEl = document.getElementById("handCount");
+const poseStatusEl = document.getElementById("poseStatus");
+
+let handLandmarker, poseLandmarker;
+let facingMode = "user";
+let stream = null;
+let running = false;
+let paused = false;
+let lastFrameTime = performance.now();
+let fpsSmoothed = 0;
+
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17]
+];
+
+// Upper-body subset only — the half of the pose that carries ASL.
+const POSE_CONNECTIONS = [
+  [11,12],[11,13],[13,15],[12,14],[14,16],
+  [11,23],[12,24],[23,24]
+];
+
+async function loadModels() {
+  const fileset = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+  );
+
+  handLandmarker = await HandLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO",
+    numHands: 2
+  });
+
+  poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO",
+    numPoses: 1
+  });
+}
+
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
+    audio: false
+  });
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+}
+
+function drawPoints(points, color, radius) {
+  ctx.fillStyle = color;
+  for (const p of points) {
+    ctx.beginPath();
+    ctx.arc(p.x * canvas.width, p.y * canvas.height, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawConnections(points, connections, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  for (const [a, b] of connections) {
+    if (!points[a] || !points[b]) continue;
+    ctx.beginPath();
+    ctx.moveTo(points[a].x * canvas.width, points[a].y * canvas.height);
+    ctx.lineTo(points[b].x * canvas.width, points[b].y * canvas.height);
+    ctx.stroke();
+  }
+}
+
+function loop() {
+  if (!running) return;
+  if (paused) {
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  const now = performance.now();
+  const dt = now - lastFrameTime;
+  lastFrameTime = now;
+  const instFps = 1000 / dt;
+  fpsSmoothed = fpsSmoothed ? fpsSmoothed * 0.9 + instFps * 0.1 : instFps;
+  fpsEl.textContent = fpsSmoothed.toFixed(0);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const timestamp = now;
+  const handResult = handLandmarker.detectForVideo(video, timestamp);
+  const poseResult = poseLandmarker.detectForVideo(video, timestamp);
+
+  handCountEl.textContent = handResult.landmarks.length;
+  handResult.landmarks.forEach((lm, i) => {
+    const handedness = handResult.handedness[i]?.[0]?.categoryName;
+    const color = handedness === "Left" ? "var(--hand-left)" : "var(--hand-right)";
+    const resolved = getComputedStyle(document.documentElement)
+      .getPropertyValue(handedness === "Left" ? "--hand-left" : "--hand-right").trim();
+    drawConnections(lm, HAND_CONNECTIONS, resolved);
+    drawPoints(lm, resolved, 3);
+  });
+
+  if (poseResult.landmarks.length) {
+    poseStatusEl.textContent = "tracking";
+    const poseColor = getComputedStyle(document.documentElement).getPropertyValue("--pose").trim();
+    poseResult.landmarks.forEach(lm => {
+      drawConnections(lm, POSE_CONNECTIONS, poseColor);
+      const upperBodyPoints = [11,12,13,14,15,16,23,24].map(i => lm[i]).filter(Boolean);
+      drawPoints(upperBodyPoints, poseColor, 4);
+    });
+  } else {
+    poseStatusEl.textContent = "none";
+  }
+
+  requestAnimationFrame(loop);
+}
+
+async function init() {
+  try {
+    await loadModels();
+    await startCamera();
+    statusEl.classList.add("hidden");
+    running = true;
+    pauseBtn.disabled = false;
+    requestAnimationFrame(loop);
+  } catch (e) {
+    console.error(e);
+    errEl.textContent =
+      e.name === "NotAllowedError"
+        ? "Camera permission was denied. Allow camera access and reload."
+        : "Something went wrong loading the models or camera: " + e.message;
+  }
+}
+
+startBtn.addEventListener("click", () => {
+  startBtn.disabled = true;
+  startBtn.textContent = "Loading…";
+  init();
+});
+
+flipBtn.addEventListener("click", async () => {
+  facingMode = facingMode === "user" ? "environment" : "user";
+  video.style.transform = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
+  canvas.style.transform = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
+  await startCamera();
+});
+
+pauseBtn.addEventListener("click", () => {
+  paused = !paused;
+  pauseBtn.textContent = paused ? "Resume" : "Pause";
+});
+
+window.addEventListener("resize", () => {
+  if (video.videoWidth) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
+});
+</script>
+</body>
+</html>
