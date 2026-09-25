@@ -239,7 +239,16 @@ async function loadModels() {
 }
 
 async function startCamera() {
-  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+  // iOS Safari can leave the camera resource stuck if a new stream is
+  // requested before the old one is fully released from the <video> element.
+  video.pause();
+  video.srcObject = null;
+  await new Promise(r => setTimeout(r, 150));
+
   stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
     audio: false
@@ -340,10 +349,27 @@ startBtn.addEventListener("click", () => {
 });
 
 flipBtn.addEventListener("click", async () => {
+  const previousFacingMode = facingMode;
   facingMode = facingMode === "user" ? "environment" : "user";
   video.style.transform = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
   canvas.style.transform = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
-  await startCamera();
+
+  flipBtn.disabled = true;
+  flipBtn.textContent = "Switching…";
+  try {
+    await startCamera();
+  } catch (e) {
+    console.error(e);
+    // Revert to the mode that was working before.
+    facingMode = previousFacingMode;
+    video.style.transform = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
+    canvas.style.transform = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
+    errEl.textContent = "Couldn't switch camera: " + e.message;
+    try { await startCamera(); } catch (_) { /* leave as-is if this also fails */ }
+  } finally {
+    flipBtn.disabled = false;
+    flipBtn.textContent = "Flip camera";
+  }
 });
 
 pauseBtn.addEventListener("click", () => {
