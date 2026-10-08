@@ -338,6 +338,7 @@ function loop() {
   if (paused) {
     requestAnimationFrame(loop);
     return;
+    
   }
 
   const now = performance.now();
@@ -354,6 +355,7 @@ function loop() {
   const poseResult = poseLandmarker.detectForVideo(video, timestamp);
 
   handCountEl.textContent = handResult.landmarks.length;
+  console.log(`video: ${video.videoWidth}x${video.videoHeight}, hands detected: ${handResult.landmarks.length}`);
   handResult.landmarks.forEach((lm, i) => {
     const handedness = handResult.handedness[i]?.[0]?.categoryName;
     const color = handedness === "Left" ? "var(--hand-left)" : "var(--hand-right)";
