@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <title>ASL Landmark Capture — Step 1</title>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+<script>eruda.init();</script>
 <style>
   :root {
     --bg: #0d1117;
@@ -338,7 +340,6 @@ function loop() {
   if (paused) {
     requestAnimationFrame(loop);
     return;
-    
   }
 
   const now = performance.now();
@@ -355,7 +356,9 @@ function loop() {
   const poseResult = poseLandmarker.detectForVideo(video, timestamp);
 
   handCountEl.textContent = handResult.landmarks.length;
-  console.log(`video: ${video.videoWidth}x${video.videoHeight}, hands detected: ${handResult.landmarks.length}`);
+  if (Math.round(now) % 1000 < 20) { // log roughly once a second, not every frame
+    console.log(`video: ${video.videoWidth}x${video.videoHeight}, facing: ${facingMode}, hands: ${handResult.landmarks.length}`);
+  }
   handResult.landmarks.forEach((lm, i) => {
     const handedness = handResult.handedness[i]?.[0]?.categoryName;
     const color = handedness === "Left" ? "var(--hand-left)" : "var(--hand-right)";
