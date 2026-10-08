@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <title>ASL Landmark Capture — Step 1</title>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+<script>eruda.init();</script>
 <style>
   :root {
     --bg: #0d1117;
@@ -139,6 +141,35 @@
     font-size: 13px;
     margin-top: 10px;
   }
+  #outputPanel {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    z-index: 2;
+    background: rgba(13, 17, 23, 0.85);
+    backdrop-filter: blur(4px);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    pointer-events: none;
+  }
+  #liveLetter {
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 16px;
+  }
+  #outputText {
+    font-size: 16px;
+    color: var(--text);
+    line-height: 1.4;
+    word-wrap: break-word;
+  }
+  footer button.active {
+    background: var(--accent);
+    color: #05221e;
+    border-color: var(--accent);
+  }
 </style>
 </head>
 <body>
@@ -156,6 +187,11 @@
       <div class="pill"><b>Hands</b> <span id="handCount">0</span></div>
       <div class="pill"><b>Pose</b> <span id="poseStatus">–</span></div>
       <div class="pill"><b>Models</b> <span id="onnxStatus">–</span></div>
+      <div class="pill"><b>State</b> <span id="recState">idle</span></div>
+    </div>
+    <div id="outputPanel">
+      <div id="liveLetter"></div>
+      <div id="outputText">Start signing — recording begins automatically.</div>
     </div>
     <div id="status">
       <div>
@@ -167,7 +203,9 @@
   </div>
 
   <footer>
+    <button id="modeBtn">Mode: Sign</button>
     <button id="flipBtn">Flip camera</button>
+    <button id="recordBtn" disabled>Record</button>
     <button id="pauseBtn" disabled>Pause</button>
   </footer>
 </div>
@@ -190,6 +228,169 @@ const errEl = document.getElementById("err");
 const fpsEl = document.getElementById("fps");
 const handCountEl = document.getElementById("handCount");
 const poseStatusEl = document.getElementById("poseStatus");
+const recStateEl = document.getElementById("recState");
+const outputTextEl = document.getElementById("outputText");
+const liveLetterEl = document.getElementById("liveLetter");
+const modeBtn = document.getElementById("modeBtn");
+const recordBtn = document.getElementById("recordBtn");
+
+// ============================================================
+// LANDMARK VECTOR LAYOUT — must exactly match the Python training pipeline:
+//   [0:63]    left hand  (21 points x 3)
+//   [63:126]  right hand (21 points x 3)
+//   [126:150] pose subset: indices 11,12,13,14,15,16,23,24 (8 points x 3)
+// ============================================================
+const POSE_SUBSET_ORDER = [11, 12, 13, 14, 15, 16, 23, 24];
+const L_SHOULDER_I = POSE_SUBSET_ORDER.indexOf(11);
+const R_SHOULDER_I = POSE_SUBSET_ORDER.indexOf(12);
+
+function buildFrameVector(handResult, poseResult) {
+  const vec = new Float32Array(150); // all zeros by default
+  handResult.landmarks.forEach((lm, i) => {
+    const handedness = handResult.handedness[i]?.[0]?.categoryName;
+    const offset = handedness === "Left" ? 0 : 63;
+    lm.forEach((p, j) => {
+      vec[offset + j * 3] = p.x;
+      vec[offset + j * 3 + 1] = p.y;
+      vec[offset + j * 3 + 2] = p.z;
+    });
+  });
+  if (poseResult.landmarks.length) {
+    const lm = poseResult.landmarks[0];
+    POSE_SUBSET_ORDER.forEach((idx, j) => {
+      const p = lm[idx];
+      if (!p) return;
+      vec[126 + j * 3] = p.x;
+      vec[126 + j * 3 + 1] = p.y;
+      vec[126 + j * 3 + 2] = p.z;
+    });
+  }
+  return vec;
+}
+
+// ---- normalization: direct port of normalize_frame() from training ----
+function normalizeFrame(vec) {
+  const out = new Float32Array(vec);
+  const pose = [];
+  for (let i = 0; i < 8; i++) {
+    pose.push([out[126 + i*3], out[126 + i*3 + 1], out[126 + i*3 + 2]]);
+  }
+  const lSh = pose[L_SHOULDER_I], rSh = pose[R_SHOULDER_I];
+  const center = [(lSh[0]+rSh[0])/2, (lSh[1]+rSh[1])/2, (lSh[2]+rSh[2])/2];
+  let scale = Math.hypot(lSh[0]-rSh[0], lSh[1]-rSh[1], lSh[2]-rSh[2]);
+  if (scale < 1e-6) scale = 1.0;
+
+  function normSegment(offset, n) {
+    let nonZero = false;
+    for (let i = 0; i < n*3; i++) if (out[offset+i] !== 0) { nonZero = true; break; }
+    if (!nonZero) return; // keep "no hand" as all-zero, same as training
+    for (let i = 0; i < n; i++) {
+      out[offset + i*3]     = (out[offset + i*3]     - center[0]) / scale;
+      out[offset + i*3 + 1] = (out[offset + i*3 + 1] - center[1]) / scale;
+      out[offset + i*3 + 2] = (out[offset + i*3 + 2] - center[2]) / scale;
+    }
+  }
+  normSegment(0, 21);   // left hand
+  normSegment(63, 21);  // right hand
+  for (let i = 0; i < 8; i++) {
+    out[126 + i*3]     = (pose[i][0] - center[0]) / scale;
+    out[126 + i*3 + 1] = (pose[i][1] - center[1]) / scale;
+    out[126 + i*3 + 2] = (pose[i][2] - center[2]) / scale;
+  }
+  return out;
+}
+
+// ---- normalization for isolated hand (fingerspelling) ----
+function normalizeHand(vec63) {
+  const out = new Float32Array(vec63);
+  const wrist = [out[0], out[1], out[2]];
+  const mcp = [out[27], out[28], out[29]]; // landmark 9 = middle MCP
+  let scale = Math.hypot(mcp[0]-wrist[0], mcp[1]-wrist[1], mcp[2]-wrist[2]);
+  if (scale < 1e-6) scale = 1.0;
+  for (let i = 0; i < 21; i++) {
+    out[i*3]     = (out[i*3]     - wrist[0]) / scale;
+    out[i*3 + 1] = (out[i*3 + 1] - wrist[1]) / scale;
+    out[i*3 + 2] = (out[i*3 + 2] - wrist[2]) / scale;
+  }
+  return out;
+}
+
+// ---- motion magnitude (for both segmentation and auto start/stop) ----
+function frameMotion(prevVec, vec) {
+  // mean velocity across both hands (126 values = 42 points x 3)
+  let sum = 0;
+  for (let i = 0; i < 42; i++) {
+    const dx = vec[i*3]   - prevVec[i*3];
+    const dy = vec[i*3+1] - prevVec[i*3+1];
+    const dz = vec[i*3+2] - prevVec[i*3+2];
+    sum += Math.hypot(dx, dy, dz);
+  }
+  return sum / 42;
+}
+
+// ---- motion-based segmentation — tuned params from offline evaluation:
+// min_segment_len=3, smoothing=3, valley_distance=3
+function segmentClip(frames, minSegmentLen = 3, smoothingWindow = 3, minValleyDistance = 3) {
+  if (frames.length < 2) return [frames];
+  const motion = [];
+  for (let i = 1; i < frames.length; i++) motion.push(frameMotion(frames[i-1], frames[i]));
+
+  // smooth with a simple moving average
+  const smoothed = motion.map((_, i) => {
+    let s = 0, n = 0;
+    for (let k = -Math.floor(smoothingWindow/2); k <= Math.floor(smoothingWindow/2); k++) {
+      const idx = i + k;
+      if (idx >= 0 && idx < motion.length) { s += motion[idx]; n++; }
+    }
+    return s / n;
+  });
+
+  // find local minima (valleys) at least minValleyDistance apart
+  const valleys = [];
+  let lastValley = -minValleyDistance;
+  for (let i = 1; i < smoothed.length - 1; i++) {
+    if (smoothed[i] <= smoothed[i-1] && smoothed[i] <= smoothed[i+1] && i - lastValley >= minValleyDistance) {
+      valleys.push(i);
+      lastValley = i;
+    }
+  }
+
+  const boundaries = [0, ...valleys, frames.length];
+  const segments = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const start = boundaries[i], end = boundaries[i+1];
+    if (end - start >= minSegmentLen) segments.push(frames.slice(start, end));
+  }
+  return segments.length ? segments : [frames];
+}
+
+// ---- recording state machine (sign-activity detection) ----
+const MOTION_START_THRESHOLD = 0.015;   // tune against real device/lighting
+const MOTION_STOP_THRESHOLD = 0.008;
+const START_DEBOUNCE_MS = 300;
+const STOP_HANGOVER_MS = 1300;
+const MAX_RECORDING_MS = 20000;
+
+let recState = "idle"; // idle | recording
+let frameBuffer = [];
+let prevRawVec = null;
+let aboveThresholdSince = null;
+let belowThresholdSince = null;
+let recordingStartedAt = null;
+let manualOverride = false; // true while using the Record button directly
+let mode = "sign"; // "sign" | "spell"
+
+// fingerspelling hold-detection state
+let letterHoldCandidate = null;
+let letterHoldSince = null;
+const LETTER_HOLD_MS = 500;
+let currentWord = "";
+let dictionary = null; // loaded from models/stem_dictionary.json
+
+fetch("models/stem_dictionary.json")
+  .then(r => r.ok ? r.json() : null)
+  .then(d => { dictionary = d; console.log(dictionary ? `dictionary loaded: ${Object.keys(dictionary).length} words` : "no dictionary"); })
+  .catch(() => console.log("dictionary not found — word correction disabled"));
 
 let handLandmarker, poseLandmarker;
 
@@ -333,12 +534,100 @@ function drawConnections(points, connections, color) {
   }
 }
 
+// ---- class label lists — must match the order from gloss_to_idx / idx_to_gloss_fs
+// in training. Loaded from JSON so this file doesn't need hardcoded label arrays.
+let signClasses = null;
+let fingerspellClasses = null;
+Promise.all([
+  fetch("models/sign_classes.json").then(r => r.json()),
+  fetch("models/fingerspell_classes.json").then(r => r.json()),
+]).then(([s, f]) => { signClasses = s; fingerspellClasses = f; })
+  .catch(() => console.log("class label files not found — add models/sign_classes.json and models/fingerspell_classes.json"));
+
+async function classifySignSegment(segmentFrames, k = 5) {
+  const T = segmentFrames.length;
+  const flat = new Float32Array(T * 150);
+  segmentFrames.forEach((f, i) => flat.set(normalizeFrame(f), i * 150));
+  const input = new ort.Tensor("float32", flat, [1, T, 150]);
+  const result = await signSession.run({ landmarks: input });
+  const logits = result.logits.data;
+  return topK(logits, signClasses, k);
+}
+
+async function classifyLetter(handVec63, k = 3) {
+  const norm = normalizeHand(handVec63);
+  const input = new ort.Tensor("float32", norm, [1, 63]);
+  const result = await fingerspellSession.run({ landmarks: input });
+  const logits = result.logits.data;
+  return topK(logits, fingerspellClasses, k);
+}
+
+function softmax(logits) {
+  const max = Math.max(...logits);
+  const exps = logits.map(x => Math.exp(x - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map(x => x / sum);
+}
+
+function topK(logits, classes, k) {
+  const probs = softmax(Array.from(logits));
+  const indexed = probs.map((p, i) => [classes ? classes[i] : i, p]);
+  indexed.sort((a, b) => b[1] - a[1]);
+  return indexed.slice(0, k);
+}
+
+// ---- word correction: confidence-weighted edit distance + dictionary frequency ----
+// Port of infer_word() from the Colab notebook.
+function levenshteinWeighted(raw, candidate, letterCandidates) {
+  // simple DP edit distance, but substitution cost is weighted by how
+  // confident the model was in the letter at that position (low confidence
+  // = cheap to "correct"), same idea as the Python version.
+  const n = raw.length, m = candidate.length;
+  const dp = Array.from({length: n+1}, () => new Array(m+1).fill(0));
+  for (let i = 0; i <= n; i++) dp[i][0] = i;
+  for (let j = 0; j <= m; j++) dp[0][j] = j;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const rawChar = raw[i-1], candChar = candidate[j-1];
+      let subCost;
+      if (rawChar === candChar) {
+        subCost = 0;
+      } else {
+        const candsHere = letterCandidates[i-1] || [];
+        const match = candsHere.find(([ch]) => ch.toLowerCase() === candChar);
+        subCost = match ? (1 - match[1]) : 1.5;
+      }
+      dp[i][j] = Math.min(
+        dp[i-1][j] + 1,
+        dp[i][j-1] + 1,
+        dp[i-1][j-1] + subCost
+      );
+    }
+  }
+  return dp[n][m];
+}
+
+function inferWord(letterCandidates) {
+  const raw = letterCandidates.map(c => c[0][0].toLowerCase()).join("");
+  if (!dictionary) return { word: raw, confidence: 0 };
+
+  let best = null, bestScore = Infinity;
+  for (const [word, freq] of Object.entries(dictionary)) {
+    if (Math.abs(word.length - raw.length) > 3) continue; // quick prune
+    const cost = levenshteinWeighted(raw, word, letterCandidates);
+    const freqBonus = Math.log(freq + 1) * 0.05;
+    const score = cost - freqBonus;
+    if (score < bestScore) { bestScore = score; best = word; }
+  }
+  if (!best) return { word: raw, confidence: 0 };
+  return { word: best, confidence: 1 / (1 + bestScore) };
+}
+
 function loop() {
   if (!running) return;
   if (paused) {
     requestAnimationFrame(loop);
     return;
-    
   }
 
   const now = performance.now();
@@ -355,7 +644,9 @@ function loop() {
   const poseResult = poseLandmarker.detectForVideo(video, timestamp);
 
   handCountEl.textContent = handResult.landmarks.length;
-  console.log(`video: ${video.videoWidth}x${video.videoHeight}, hands detected: ${handResult.landmarks.length}`);
+  if (Math.round(now) % 1000 < 20) { // log roughly once a second, not every frame
+    console.log(`video: ${video.videoWidth}x${video.videoHeight}, facing: ${facingMode}, hands: ${handResult.landmarks.length}`);
+  }
   handResult.landmarks.forEach((lm, i) => {
     const handedness = handResult.handedness[i]?.[0]?.categoryName;
     const color = handedness === "Left" ? "var(--hand-left)" : "var(--hand-right)";
@@ -377,7 +668,136 @@ function loop() {
     poseStatusEl.textContent = "none";
   }
 
+  // ---- build this frame's 150-vector and run mode-specific logic ----
+  const rawVec = buildFrameVector(handResult, poseResult);
+
+  if (mode === "sign") {
+    runSignModeFrame(rawVec, now);
+  } else {
+    runSpellModeFrame(handResult, now);
+  }
+
   requestAnimationFrame(loop);
+}
+
+function runSignModeFrame(rawVec, now) {
+  const motion = prevRawVec ? frameMotion(prevRawVec, rawVec) : 0;
+  prevRawVec = rawVec;
+
+  if (!manualOverride) {
+    if (recState === "idle") {
+      if (motion > MOTION_START_THRESHOLD) {
+        if (aboveThresholdSince === null) aboveThresholdSince = now;
+        if (now - aboveThresholdSince >= START_DEBOUNCE_MS) startRecording(now);
+      } else {
+        aboveThresholdSince = null;
+      }
+    } else if (recState === "recording") {
+      if (motion < MOTION_STOP_THRESHOLD) {
+        if (belowThresholdSince === null) belowThresholdSince = now;
+        if (now - belowThresholdSince >= STOP_HANGOVER_MS) stopRecording();
+      } else {
+        belowThresholdSince = null;
+      }
+    }
+  }
+
+  if (recState === "recording") {
+    frameBuffer.push(rawVec);
+    if (now - recordingStartedAt > MAX_RECORDING_MS) stopRecording();
+  }
+}
+
+function startRecording(now) {
+  recState = "recording";
+  recStateEl.textContent = "recording";
+  frameBuffer = [];
+  recordingStartedAt = now;
+  belowThresholdSince = null;
+  outputTextEl.textContent = "Listening…";
+}
+
+async function stopRecording() {
+  recState = "idle";
+  recStateEl.textContent = "processing…";
+  aboveThresholdSince = null;
+  belowThresholdSince = null;
+  const frames = frameBuffer;
+  frameBuffer = [];
+
+  if (frames.length < 3) {
+    recStateEl.textContent = "idle";
+    return;
+  }
+
+  try {
+    const segments = segmentClip(frames);
+    const words = [];
+    for (const seg of segments) {
+      const top5 = await classifySignSegment(seg);
+      if (top5[0][1] > 0.15) words.push(top5[0][0]); // only keep reasonably confident guesses
+    }
+    outputTextEl.textContent = words.length
+      ? words.join(" ")
+      : "(no confident signs recognized — try again)";
+  } catch (e) {
+    console.error(e);
+    outputTextEl.textContent = "Error during recognition — see console.";
+  }
+  recStateEl.textContent = "idle";
+}
+
+async function runSpellModeFrame(handResult, now) {
+  if (handResult.landmarks.length === 0) {
+    letterHoldCandidate = null;
+    letterHoldSince = null;
+    liveLetterEl.textContent = "";
+    return;
+  }
+  // use the first detected hand for fingerspelling
+  const lm = handResult.landmarks[0];
+  const vec63 = new Float32Array(63);
+  lm.forEach((p, j) => { vec63[j*3] = p.x; vec63[j*3+1] = p.y; vec63[j*3+2] = p.z; });
+
+  const top3 = await classifyLetter(vec63);
+  const [letter, conf] = top3[0];
+  liveLetterEl.textContent = `${letter.toUpperCase()} (${(conf*100).toFixed(0)}%)`;
+
+  if (letter === letterHoldCandidate) {
+    if (now - letterHoldSince >= LETTER_HOLD_MS) {
+      commitLetter(letter, top3);
+      letterHoldCandidate = null; // require releasing the hold before re-committing
+      letterHoldSince = null;
+    }
+  } else {
+    letterHoldCandidate = letter;
+    letterHoldSince = now;
+  }
+}
+
+let pendingLetterCandidates = [];
+
+function commitLetter(letter, top3) {
+  if (letter === "space") {
+    finalizeWord();
+    return;
+  }
+  if (letter === "del") {
+    currentWord = currentWord.slice(0, -1);
+    pendingLetterCandidates.pop();
+  } else {
+    currentWord += letter;
+    pendingLetterCandidates.push(top3);
+  }
+  outputTextEl.textContent = currentWord || "(spelling...)";
+}
+
+function finalizeWord() {
+  if (!currentWord) return;
+  const { word, confidence } = inferWord(pendingLetterCandidates);
+  outputTextEl.textContent = `${word} (raw: "${currentWord}", conf ${(confidence*100).toFixed(0)}%)`;
+  currentWord = "";
+  pendingLetterCandidates = [];
 }
 
 async function init() {
@@ -388,6 +808,7 @@ async function init() {
     statusEl.classList.add("hidden");
     running = true;
     pauseBtn.disabled = false;
+    recordBtn.disabled = mode !== "sign";
     requestAnimationFrame(loop);
   } catch (e) {
     console.error(e);
@@ -414,7 +835,14 @@ flipBtn.addEventListener("click", async () => {
   flipBtn.disabled = true;
   flipBtn.textContent = "Switching…";
   try {
+    // MediaPipe's landmarkers keep internal frame-to-frame tracking state.
+    // Reusing them across a camera stream swap can leave that state
+    // referencing geometry that's invalid for the new stream, crashing
+    // the detection graph. Dispose and recreate them fresh on every switch.
+    handLandmarker?.close();
+    poseLandmarker?.close();
     await startCamera();
+    await loadModels();
   } catch (e) {
     console.error(e);
     // Revert to the mode that was working before.
@@ -426,6 +854,30 @@ flipBtn.addEventListener("click", async () => {
   } finally {
     flipBtn.disabled = false;
     flipBtn.textContent = "Flip camera";
+  }
+});
+
+modeBtn.addEventListener("click", () => {
+  mode = mode === "sign" ? "spell" : "sign";
+  modeBtn.textContent = `Mode: ${mode === "sign" ? "Sign" : "Spell"}`;
+  recordBtn.disabled = mode !== "sign";
+  liveLetterEl.textContent = "";
+  currentWord = "";
+  pendingLetterCandidates = [];
+  outputTextEl.textContent = mode === "sign"
+    ? "Start signing — recording begins automatically."
+    : "Hold a letter steady to spell.";
+});
+
+recordBtn.addEventListener("click", () => {
+  if (recState === "idle") {
+    manualOverride = true;
+    startRecording(performance.now());
+    recordBtn.textContent = "Stop";
+  } else {
+    manualOverride = false;
+    recordBtn.textContent = "Record";
+    stopRecording();
   }
 });
 
