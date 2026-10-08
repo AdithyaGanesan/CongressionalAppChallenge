@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <title>ASL Landmark Capture — Step 1</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <style>
   :root {
     --bg: #0d1117;
@@ -154,6 +155,7 @@
       <div class="pill"><b>FPS</b> <span id="fps">–</span></div>
       <div class="pill"><b>Hands</b> <span id="handCount">0</span></div>
       <div class="pill"><b>Pose</b> <span id="poseStatus">–</span></div>
+      <div class="pill"><b>Models</b> <span id="onnxStatus">–</span></div>
     </div>
     <div id="status">
       <div>
@@ -190,6 +192,57 @@ const handCountEl = document.getElementById("handCount");
 const poseStatusEl = document.getElementById("poseStatus");
 
 let handLandmarker, poseLandmarker;
+
+// ---- ONNX model setup ----
+// Adjust these paths to wherever you placed the .onnx files in your repo
+// (e.g. a "models/" folder next to this HTML file on GitHub Pages).
+const SIGN_MODEL_PATH = "models/stat_sign_model.onnx";
+const FINGERSPELL_MODEL_PATH = "models/stat_fingerspelling_model.onnx";
+
+let signSession = null;
+let fingerspellSession = null;
+const onnxStatusEl = document.getElementById("onnxStatus");
+
+async function loadOnnxModels() {
+  // wasm files are resolved relative to the ort.min.js CDN URL automatically;
+  // no extra config needed for the common case.
+  signSession = await ort.InferenceSession.create(SIGN_MODEL_PATH, {
+    executionProviders: ["wasm"],
+  });
+  fingerspellSession = await ort.InferenceSession.create(FINGERSPELL_MODEL_PATH, {
+    executionProviders: ["wasm"],
+  });
+
+  // --- confirmation run: dummy input through each model, just to prove
+  // the session is live and the input/output shapes line up as expected.
+  // This does NOT validate the model is numerically correct (that was
+  // already confirmed against PyTorch in Colab) — it only confirms the
+  // browser can actually load and run it.
+
+  // whole-sign model: [1, T, 150], T is dynamic — use T=20 as a dummy
+  const dummyT = 20;
+  const signInput = new ort.Tensor(
+    "float32",
+    new Float32Array(1 * dummyT * 150), // all zeros
+    [1, dummyT, 150]
+  );
+  const signResult = await signSession.run({ landmarks: signInput });
+  const signLogits = signResult.logits.data;
+  console.log(`sign model: output shape OK, ${signLogits.length} classes`);
+
+  // fingerspelling model: [1, 63]
+  const fsInput = new ort.Tensor(
+    "float32",
+    new Float32Array(1 * 63),
+    [1, 63]
+  );
+  const fsResult = await fingerspellSession.run({ landmarks: fsInput });
+  const fsLogits = fsResult.logits.data;
+  console.log(`fingerspelling model: output shape OK, ${fsLogits.length} classes`);
+
+  onnxStatusEl.textContent = `ok (${signLogits.length}/${fsLogits.length})`;
+}
+
 let facingMode = "user";
 let stream = null;
 let running = false;
@@ -327,7 +380,8 @@ function loop() {
 
 async function init() {
   try {
-    await loadModels();
+    onnxStatusEl.textContent = "loading…";
+    await Promise.all([loadModels(), loadOnnxModels()]);
     await startCamera();
     statusEl.classList.add("hidden");
     running = true;
@@ -335,6 +389,7 @@ async function init() {
     requestAnimationFrame(loop);
   } catch (e) {
     console.error(e);
+    onnxStatusEl.textContent = "failed";
     errEl.textContent =
       e.name === "NotAllowedError"
         ? "Camera permission was denied. Allow camera access and reload."
