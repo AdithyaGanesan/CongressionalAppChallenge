@@ -391,7 +391,12 @@ let mode = "sign"; // "sign" | "spell"
 // fingerspelling hold-detection state
 let letterHoldCandidate = null;
 let letterHoldSince = null;
-const LETTER_HOLD_MS = 500;
+// Fluent fingerspelling runs ~150-250 ms per letter, so 500 ms dropped most letters.
+const LETTER_HOLD_MS = 200;
+// The same letter isn't committed twice in a row (a slow hold would otherwise give
+// "AAA"). Cleared when the hand leaves view. Real double letters (the "LL" in
+// "hello") come out single; word correction restores them.
+let lastCommittedLetter = null;
 let currentWord = "";
 let dictionary = null; // general English (english_dictionary.json) merged with STEM (stem_dictionary.json)
 
@@ -627,15 +632,21 @@ function topK(logits, classes, k) {
 
 // ---- word correction: confidence-weighted edit distance + dictionary frequency ----
 // Port of infer_word() from the Colab notebook.
-function levenshteinWeighted(raw, candidate, letterCandidates) {
+// The app never commits the same letter twice in a row, so "look" arrives as "lok".
+// Restoring the second letter of a double is nearly free.
+const DOUBLE_LETTER_COST = 0.1;
+
+function levenshteinWeighted(raw, candidate, letterCandidates, cutoff = Infinity) {
   // simple DP edit distance, but substitution cost is weighted by how
   // confident the model was in the letter at that position (low confidence
   // = cheap to "correct"), same idea as the Python version.
   const n = raw.length, m = candidate.length;
+  const insCost = j => (j >= 2 && candidate[j-1] === candidate[j-2]) ? DOUBLE_LETTER_COST : 1;
   const dp = Array.from({length: n+1}, () => new Array(m+1).fill(0));
   for (let i = 0; i <= n; i++) dp[i][0] = i;
-  for (let j = 0; j <= m; j++) dp[0][j] = j;
+  for (let j = 1; j <= m; j++) dp[0][j] = dp[0][j-1] + insCost(j);
   for (let i = 1; i <= n; i++) {
+    let rowMin = Infinity;
     for (let j = 1; j <= m; j++) {
       const rawChar = raw[i-1], candChar = candidate[j-1];
       let subCost;
@@ -648,10 +659,13 @@ function levenshteinWeighted(raw, candidate, letterCandidates) {
       }
       dp[i][j] = Math.min(
         dp[i-1][j] + 1,
-        dp[i][j-1] + 1,
+        dp[i][j-1] + insCost(j),
         dp[i-1][j-1] + subCost
       );
+      rowMin = Math.min(rowMin, dp[i][j], dp[i][0]);
     }
+    // costs only grow from row to row, so this word can no longer win
+    if (rowMin > cutoff) return Infinity;
   }
   return dp[n][m];
 }
@@ -663,8 +677,8 @@ function inferWord(letterCandidates) {
   let best = null, bestScore = Infinity;
   for (const [word, freq] of Object.entries(dictionary)) {
     if (Math.abs(word.length - raw.length) > 3) continue; // quick prune
-    const cost = levenshteinWeighted(raw, word, letterCandidates);
     const freqBonus = Math.log(freq + 1) * 0.05;
+    const cost = levenshteinWeighted(raw, word, letterCandidates, bestScore + freqBonus);
     const score = cost - freqBonus;
     if (score < bestScore) { bestScore = score; best = word; }
   }
@@ -804,6 +818,7 @@ async function runSpellModeFrame(handResult, now) {
     letterHoldCandidate = null;
     letterHoldSince = null;
     liveLetterEl.textContent = "";
+    lastCommittedLetter = null;
     // hand dropped out of view for a moment = end of the word
     if (noHandSince === null) noHandSince = now;
     else if (currentWord && now - noHandSince >= WORD_END_NO_HAND_MS) finalizeWord();
@@ -827,6 +842,14 @@ async function runSpellModeFrame(handResult, now) {
   const [letter, conf] = top3[0];
   liveLetterEl.textContent = `${letter.toUpperCase()} (${(conf*100).toFixed(0)}%)`;
 
+  // "space"/"del" are Kaggle gestures, not ASL; never commit them. Word ends come
+  // from the hand leaving view (WORD_END_NO_HAND_MS).
+  if (letter === "space" || letter === "del" || letter === lastCommittedLetter) {
+    letterHoldCandidate = null;
+    letterHoldSince = null;
+    return;
+  }
+
   if (letter === letterHoldCandidate) {
     if (now - letterHoldSince >= LETTER_HOLD_MS) {
       commitLetter(letter, top3);
@@ -842,18 +865,10 @@ async function runSpellModeFrame(handResult, now) {
 let pendingLetterCandidates = [];
 
 function commitLetter(letter, top3) {
-  if (letter === "space") {
-    finalizeWord();
-    return;
-  }
-  if (letter === "del") {
-    currentWord = currentWord.slice(0, -1);
-    pendingLetterCandidates.pop();
-  } else {
-    currentWord += letter;
-    pendingLetterCandidates.push(top3);
-  }
-  outputTextEl.textContent = currentWord || "(spelling...)";
+  lastCommittedLetter = letter;
+  currentWord += letter;
+  pendingLetterCandidates.push(top3);
+  outputTextEl.textContent = currentWord;
 }
 
 function finalizeWord() {
@@ -940,6 +955,7 @@ modeBtn.addEventListener("click", () => {
   liveLetterEl.textContent = "";
   currentWord = "";
   pendingLetterCandidates = [];
+  lastCommittedLetter = null;
   outputTextEl.textContent = mode === "sign"
     ? "Start signing — recording begins automatically."
     : "Hold a letter steady to spell.";
