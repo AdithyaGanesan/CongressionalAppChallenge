@@ -121,13 +121,13 @@
     padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
     background: var(--panel);
     border-top: 1px solid var(--line);
-    display: flex;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
     z-index: 3;
   }
   footer button {
-    flex: 1;
-    padding: 12px;
+    padding: 10px 6px;
     border-radius: 10px;
     border: 1px solid var(--line);
     background: #1c232c;
@@ -207,7 +207,14 @@
     <button id="flipBtn">Flip camera</button>
     <button id="recordBtn" disabled>Record</button>
     <button id="pauseBtn" disabled>Pause</button>
+    <button id="handBtn">Hand: Right</button>
+    <button id="vocabBtn">Vocab</button>
   </footer>
+  <dialog id="vocabDialog" style="max-width:90vw;max-height:80vh;overflow:auto;">
+    <p><strong>Signs the model knows</strong> (anything else shows as “?”)</p>
+    <p id="vocabList" style="font-size:14px;line-height:1.5;"></p>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
 </div>
 
 <script type="module">
@@ -246,13 +253,14 @@ const R_SHOULDER_I = POSE_SUBSET_ORDER.indexOf(12);
 
 function buildFrameVector(handResult, poseResult) {
   const vec = new Float32Array(150); // all zeros by default
+  const ax = aspectFactor(TRAIN_ASPECT_SIGN);
   handResult.landmarks.forEach((lm, i) => {
     const handedness = handResult.handedness[i]?.[0]?.categoryName;
     const offset = handedness === "Left" ? 0 : 63;
     lm.forEach((p, j) => {
-      vec[offset + j * 3] = p.x;
+      vec[offset + j * 3] = p.x * ax;
       vec[offset + j * 3 + 1] = p.y;
-      vec[offset + j * 3 + 2] = p.z;
+      vec[offset + j * 3 + 2] = p.z * ax;
     });
   });
   if (poseResult.landmarks.length) {
@@ -260,9 +268,9 @@ function buildFrameVector(handResult, poseResult) {
     POSE_SUBSET_ORDER.forEach((idx, j) => {
       const p = lm[idx];
       if (!p) return;
-      vec[126 + j * 3] = p.x;
+      vec[126 + j * 3] = p.x * ax;
       vec[126 + j * 3 + 1] = p.y;
-      vec[126 + j * 3 + 2] = p.z;
+      vec[126 + j * 3 + 2] = p.z * ax;
     });
   }
   return vec;
@@ -385,12 +393,45 @@ let letterHoldCandidate = null;
 let letterHoldSince = null;
 const LETTER_HOLD_MS = 500;
 let currentWord = "";
-let dictionary = null; // loaded from models/stem_dictionary.json
+let dictionary = null; // general English (english_dictionary.json) merged with STEM (stem_dictionary.json)
 
-fetch("models/stem_dictionary.json")
-  .then(r => r.ok ? r.json() : null)
-  .then(d => { dictionary = d; console.log(dictionary ? `dictionary loaded: ${Object.keys(dictionary).length} words` : "no dictionary"); })
-  .catch(() => console.log("dictionary not found — word correction disabled"));
+// Which hand the signer fingerspells with. MediaPipe labels the hand as the
+// signer sees it on this camera (confirmed: a raised right hand shows orange = "Right").
+let dominantHand = "Right";
+
+// Fingerspelling: finalize the current word when no hand is seen for this long
+// (real fingerspellers mark word ends by pausing/dropping the hand, not a "space" sign).
+const WORD_END_NO_HAND_MS = 900;
+let noHandSince = null;
+
+// Sign mode: segments whose top guess is below this are shown as "?" instead of
+// a confident-looking wrong word. 0.15 was far too permissive.
+const SIGN_CONFIDENCE_MIN = 0.40;
+
+// Aspect-ratio correction. MediaPipe x/y are fractions of the frame width/height,
+// so hand shapes are stretched differently on a portrait phone (e.g. 480x640)
+// than in the training media. Fingerspelling training images were 200x200 (aspect 1).
+// TRAIN_ASPECT_SIGN = width/height of the ASL Citizen training videos. Measured on a
+// random sample of 10: 8 were 640x480 (4:3), 2 were 960x540 (16:9), so use 4:3.
+const TRAIN_ASPECT_FS = 1.0;
+const TRAIN_ASPECT_SIGN = 4 / 3;
+
+Promise.all([
+  fetch("models/english_dictionary.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
+  fetch("models/stem_dictionary.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
+]).then(([eng, stem]) => {
+  const merged = { ...eng };
+  // STEM words keep a boost so technical terms aren't drowned out by everyday words
+  for (const [w, c] of Object.entries(stem)) merged[w] = Math.max(merged[w] || 0, c * 1000);
+  dictionary = Object.keys(merged).length ? merged : null;
+  console.log(`dictionary loaded: ${Object.keys(eng).length} English + ${Object.keys(stem).length} STEM words`);
+});
+
+// Rescale x and z so the hand/body geometry has the same proportions as in training.
+function aspectFactor(trainAspect) {
+  if (!trainAspect || !video.videoWidth || !video.videoHeight) return 1;
+  return (video.videoWidth / video.videoHeight) / trainAspect;
+}
 
 let handLandmarker, poseLandmarker;
 
@@ -555,11 +596,19 @@ async function classifySignSegment(segmentFrames, k = 5) {
 }
 
 async function classifyLetter(handVec63, k = 3) {
+  // The training photos were all one hand seen from one side. Rather than guess
+  // whether the live hand matches that chirality, classify both the hand and its
+  // mirror image and keep whichever the model is more confident about.
   const norm = normalizeHand(handVec63);
-  const input = new ort.Tensor("float32", norm, [1, 63]);
-  const result = await fingerspellSession.run({ landmarks: input });
-  const logits = result.logits.data;
-  return topK(logits, fingerspellClasses, k);
+  const mirrored = new Float32Array(norm);
+  for (let i = 0; i < 21; i++) mirrored[i * 3] = -mirrored[i * 3];
+
+  const run = async (v) => {
+    const result = await fingerspellSession.run({ landmarks: new ort.Tensor("float32", v, [1, 63]) });
+    return topK(result.logits.data, fingerspellClasses, k);
+  };
+  const [a, b] = await Promise.all([run(norm), run(mirrored)]);
+  return a[0][1] >= b[0][1] ? a : b;
 }
 
 function softmax(logits) {
@@ -733,13 +782,16 @@ async function stopRecording() {
   try {
     const segments = segmentClip(frames);
     const words = [];
+    let known = 0;
     for (const seg of segments) {
       const top5 = await classifySignSegment(seg);
-      if (top5[0][1] > 0.15) words.push(top5[0][0]); // only keep reasonably confident guesses
+      console.log("segment top5:", top5.map(([w, p]) => `${w} ${(p*100).toFixed(0)}%`).join(", "));
+      if (top5[0][1] >= SIGN_CONFIDENCE_MIN) { words.push(top5[0][0]); known++; }
+      else words.push("?"); // a sign happened, but it isn't one the model knows well
     }
-    outputTextEl.textContent = words.length
+    outputTextEl.textContent = known
       ? words.join(" ")
-      : "(no confident signs recognized — try again)";
+      : "(no signs from the known vocabulary recognized — try again)";
   } catch (e) {
     console.error(e);
     outputTextEl.textContent = "Error during recognition — see console.";
@@ -752,12 +804,24 @@ async function runSpellModeFrame(handResult, now) {
     letterHoldCandidate = null;
     letterHoldSince = null;
     liveLetterEl.textContent = "";
+    // hand dropped out of view for a moment = end of the word
+    if (noHandSince === null) noHandSince = now;
+    else if (currentWord && now - noHandSince >= WORD_END_NO_HAND_MS) finalizeWord();
     return;
   }
-  // use the first detected hand for fingerspelling
-  const lm = handResult.landmarks[0];
+  noHandSince = null;
+
+  // Use the signer's dominant hand, not whichever hand MediaPipe happened to list
+  // first — with both hands in view, [0] was often the resting hand.
+  let idx = handResult.handedness.findIndex(h => h?.[0]?.categoryName === dominantHand);
+  if (idx === -1) {
+    if (handResult.landmarks.length > 1) return; // two hands, neither labeled dominant: skip frame
+    idx = 0;
+  }
+  const lm = handResult.landmarks[idx];
+  const ax = aspectFactor(TRAIN_ASPECT_FS);
   const vec63 = new Float32Array(63);
-  lm.forEach((p, j) => { vec63[j*3] = p.x; vec63[j*3+1] = p.y; vec63[j*3+2] = p.z; });
+  lm.forEach((p, j) => { vec63[j*3] = p.x * ax; vec63[j*3+1] = p.y; vec63[j*3+2] = p.z * ax; });
 
   const top3 = await classifyLetter(vec63);
   const [letter, conf] = top3[0];
@@ -819,6 +883,18 @@ async function init() {
         : "Something went wrong loading the models or camera: " + e.message;
   }
 }
+
+document.getElementById("handBtn").addEventListener("click", (e) => {
+  dominantHand = dominantHand === "Right" ? "Left" : "Right";
+  e.target.textContent = `Hand: ${dominantHand}`;
+});
+
+document.getElementById("vocabBtn").addEventListener("click", () => {
+  document.getElementById("vocabList").textContent = signClasses
+    ? [...signClasses].sort().join(" · ")
+    : "Vocabulary list not loaded (models/sign_classes.json missing).";
+  document.getElementById("vocabDialog").showModal();
+});
 
 startBtn.addEventListener("click", () => {
   startBtn.disabled = true;
