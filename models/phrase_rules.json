@@ -1,0 +1,14 @@
+{
+  "_about": "Hand-written rules that turn recognized signs into English. Not AI: each rule is a fixed pattern. {X} stands for any one sign or fingerspelled word. A pattern must match the whole line (unknown '?' segments are ignored). A line can also complete the line just before it, e.g. F-O-R-C-E then MEAN. When no rule matches, the signs are shown as plain words. The raw signs are always shown underneath.",
+  "rules": [
+    { "signs": "{X} MEAN WHAT", "english": "What does {X} mean?" },
+    { "signs": "WHAT {X} MEAN", "english": "What does {X} mean?" },
+    { "signs": "{X} MEAN", "english": "What does {X} mean?", "note": "In ASL a question is marked on the face (eyebrows), which STAT can't see, so X MEAN is read as a question." },
+    { "signs": "HELLO", "english": "Hello." },
+    { "signs": "HI", "english": "Hi." },
+    { "signs": "QUESTION", "english": "I have a question." },
+    { "signs": "HELP", "english": "Can you help me?" },
+    { "signs": "UNDERSTAND", "english": "I understand." },
+    { "signs": "THANK-YOU", "english": "Thank you." }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "_about": "Topic diagrams shown when a recognized sign or corrected fingerspelled word matches a keyword. Mermaid flowchart source; keep each one small and check the science.",
+  "topics": [
+    {
+      "id": "force",
+      "title": "Force",
+      "keywords": [
+        "force",
+        "forces",
+        "push",
+        "pull",
+        "newton",
+        "newtons"
+      ],
+      "mermaid": "flowchart TD\n  F[\"Force = a push or a pull\"] --> P[\"Push: moves away\"]\n  F --> Q[\"Pull: comes closer\"]\n  P --> L[\"F = m × a<br/>force = mass × acceleration\"]\n  Q --> L\n  L --> N[\"Measured in newtons (N)<br/>1 N = 1 kg·m/s²\"]"
+    },
+    {
+      "id": "gravity",
+      "title": "Gravity",
+      "keywords": [
+        "gravity",
+        "gravitational",
+        "weight"
+      ],
+      "mermaid": "flowchart TD\n  E[\"Earth\"] -->|pulls toward its center| O[\"Any object, e.g. an apple\"]\n  O --> W[\"Weight = mass × g\"]\n  W --> G[\"g ≈ 9.8 m/s² on Earth\"]\n  G --> X[\"Example: 10 kg × 9.8 m/s² = 98 N\"]"
+    },
+    {
+      "id": "energy",
+      "title": "Energy",
+      "keywords": [
+        "energy",
+        "kinetic",
+        "potential"
+      ],
+      "mermaid": "flowchart TD\n  A[\"Ball at the top of a ramp<br/>stored (potential) energy\"] -->|rolls down| B[\"Ball moving fast<br/>moving (kinetic) energy\"]\n  B -->|friction| C[\"Heat in the ramp and air\"]\n  C --> D[\"Energy is not lost,<br/>it changes form\"]"
+    },
+    {
+      "id": "cell",
+      "title": "Animal cell",
+      "keywords": [
+        "cell",
+        "cells"
+      ],
+      "mermaid": "flowchart TD\n  M[\"Cell membrane<br/>controls what goes in and out\"] --> C[\"Cytoplasm<br/>jelly that fills the cell\"]\n  C --> N[\"Nucleus<br/>the control center\"]\n  N --> D[\"DNA<br/>instructions for the cell\"]\n  C --> MI[\"Mitochondria<br/>release energy from food\"]"
+    }
+  ]
+}

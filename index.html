@@ -3,10 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-<title>ASL Landmark Capture — Step 1</title>
+<title>STAT — ASL to English</title>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 <style>
   :root {
     --bg: #0d1117;
@@ -18,6 +16,8 @@
     --hand-right: #f0a35a;
     --pose: #6e9bf7;
     --accent: #4fd1c5;
+    --listen: #ef6a6a;
+    --think: #f0c35a;
     --bad: #ef6a6a;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -37,28 +37,25 @@
     flex-direction: column;
   }
   header {
-    padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 10px;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 8px;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
     background: var(--panel);
     border-bottom: 1px solid var(--line);
     z-index: 3;
   }
-  header h1 {
-    font-size: 15px;
-    font-weight: 600;
-    margin: 0;
-    letter-spacing: 0.01em;
-  }
-  header span.step {
-    color: var(--muted);
-    font-size: 12px;
+  header h1 { font-size: 18px; font-weight: 700; margin: 0; letter-spacing: 0.04em; }
+  header h1 span { color: var(--muted); font-weight: 500; font-size: 13px; letter-spacing: 0; margin-left: 6px; }
+  header button {
+    background: #1c232c; color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; font-size: 13px;
   }
   #stage {
     position: relative;
     flex: 1;
+    min-height: 0;
     overflow: hidden;
     background: #000;
   }
@@ -71,145 +68,128 @@
   }
   video { transform: scaleX(-1); }
   canvas { transform: scaleX(-1); }
+  #indicator {
+    position: absolute; top: 10px; left: 10px; z-index: 2;
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(13, 17, 23, 0.75); backdrop-filter: blur(4px);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 12px; font-size: 14px; font-weight: 600;
+  }
+  #indicator .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  #indicator.listening .dot { background: var(--listen); animation: pulse 1s infinite; }
+  #indicator.thinking .dot { background: var(--think); animation: pulse 0.5s infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
   #hud {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    right: 10px;
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    z-index: 2;
-    pointer-events: none;
+    position: absolute; top: 48px; left: 10px; right: 10px;
+    display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; pointer-events: none;
   }
   .pill {
-    background: rgba(13, 17, 23, 0.75);
-    backdrop-filter: blur(4px);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 5px 9px;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
+    background: rgba(13, 17, 23, 0.75); border: 1px solid var(--line); border-radius: 8px;
+    padding: 4px 8px; font-size: 11px; font-variant-numeric: tabular-nums;
   }
   .pill b { color: var(--muted); font-weight: 500; }
+  #diagram {
+    position: absolute; top: 52px; left: 10px; right: 10px; z-index: 2;
+    max-height: calc(100% - 64px); overflow: auto;
+    background: rgba(13, 17, 23, 0.92); backdrop-filter: blur(6px);
+    border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px 12px;
+    transform: translateY(-120%); opacity: 0;
+    transition: transform 0.45s ease, opacity 0.45s ease;
+  }
+  #diagram.shown { transform: translateY(0); opacity: 1; }
+  #diagram .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  #diagram .head strong { font-size: 16px; }
+  #diagram .head button { background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; padding: 0 4px; }
+  #diagramBody svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   #status {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 32px;
-    font-size: 15px;
-    color: var(--muted);
-    z-index: 4;
-    background: var(--bg);
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 32px; font-size: 15px; color: var(--muted); z-index: 4; background: var(--bg);
   }
   #status.hidden { display: none; }
+  #status h2 { color: var(--text); font-size: 26px; margin: 0 0 8px; letter-spacing: 0.05em; }
   #status button {
-    margin-top: 16px;
-    background: var(--accent);
-    color: #05221e;
-    border: none;
-    font-weight: 600;
-    font-size: 15px;
-    padding: 12px 22px;
-    border-radius: 10px;
+    margin-top: 18px; background: var(--accent); color: #05221e; border: none;
+    font-weight: 600; font-size: 16px; padding: 13px 26px; border-radius: 10px;
   }
-  footer {
-    padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  #err { color: var(--bad); font-size: 13px; margin-top: 10px; }
+  #transcript {
     background: var(--panel);
     border-top: 1px solid var(--line);
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
+    padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+    min-height: 30%;
+    display: flex; flex-direction: column; justify-content: flex-end; gap: 10px;
     z-index: 3;
   }
+  .entry .en { font-size: 19px; line-height: 1.25; color: var(--muted); font-weight: 600; }
+  .entry .raw { font-size: 12px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; margin-top: 2px; letter-spacing: 0.04em; }
+  .entry.latest .en { font-size: 30px; color: var(--text); }
+  .entry.latest .raw { font-size: 14px; }
+  .hint { color: var(--muted); font-size: 17px; }
+  footer {
+    padding: 8px 12px calc(env(safe-area-inset-bottom, 0px) + 8px);
+    background: var(--panel); border-top: 1px solid var(--line);
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; z-index: 3;
+  }
   footer button {
-    padding: 10px 6px;
-    border-radius: 10px;
-    border: 1px solid var(--line);
-    background: #1c232c;
-    color: var(--text);
-    font-size: 14px;
-    font-weight: 500;
+    padding: 8px 4px; border-radius: 8px; border: 1px solid var(--line);
+    background: #1c232c; color: var(--text); font-size: 12px; font-weight: 500;
   }
-  footer button:active { background: #262f3a; }
-  #err {
-    color: var(--bad);
-    font-size: 13px;
-    margin-top: 10px;
+  footer button.active { background: var(--accent); color: #05221e; border-color: var(--accent); }
+  #debugPanel {
+    background: #0a0d12; border-top: 1px solid var(--line); max-height: 32vh; overflow: auto;
+    padding: 6px 10px; font: 11px/1.35 ui-monospace, Menlo, monospace; color: #b8c4cf; white-space: pre-wrap; overflow-wrap: anywhere;
   }
-  #outputPanel {
-    position: absolute;
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
-    z-index: 2;
-    background: rgba(13, 17, 23, 0.85);
-    backdrop-filter: blur(4px);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 10px 12px;
-    pointer-events: none;
-  }
-  #liveLetter {
-    font-size: 13px;
-    color: var(--muted);
-    min-height: 16px;
-  }
-  #outputText {
-    font-size: 16px;
-    color: var(--text);
-    line-height: 1.4;
-    word-wrap: break-word;
-  }
-  footer button.active {
-    background: var(--accent);
-    color: #05221e;
-    border-color: var(--accent);
-  }
+  .debug-only { display: none !important; }
+  body.debug .debug-only { display: revert !important; }
+  body.debug footer.debug-only { display: grid !important; }
+  body.debug #hud.debug-only { display: flex !important; }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
-    <h1>Landmark capture</h1>
-    <span class="step">Step 1 of the ASL translator pipeline</span>
+    <h1>STAT<span>ASL → English</span></h1>
+    <button id="flipBtn">Flip camera</button>
   </header>
 
   <div id="stage">
     <video id="video" playsinline muted autoplay></video>
     <canvas id="overlay"></canvas>
-    <div id="hud">
+    <div id="indicator"><span class="dot"></span><span id="indicatorText">Ready</span></div>
+    <div id="hud" class="debug-only">
       <div class="pill"><b>FPS</b> <span id="fps">–</span></div>
-      <div class="pill"><b>Hands</b> <span id="handCount">0</span></div>
+      <div class="pill"><b>Hands up</b> <span id="handCount">0</span></div>
       <div class="pill"><b>Pose</b> <span id="poseStatus">–</span></div>
       <div class="pill"><b>Models</b> <span id="onnxStatus">–</span></div>
-      <div class="pill"><b>State</b> <span id="recState">idle</span></div>
     </div>
-    <div id="outputPanel">
-      <div id="liveLetter"></div>
-      <div id="outputText">Start signing — recording begins automatically.</div>
+    <div id="diagram" aria-live="polite">
+      <div class="head"><strong id="diagramTitle"></strong><button id="diagramClose" aria-label="Close diagram">×</button></div>
+      <div id="diagramBody"></div>
     </div>
     <div id="status">
       <div>
-        <div>This page turns on your camera and overlays hand and upper-body landmarks in real time, using MediaPipe running entirely on your device. Nothing is uploaded.</div>
-        <button id="startBtn">Turn on camera</button>
+        <h2>STAT</h2>
+        <div>Sign or fingerspell to the camera and STAT writes it in English. Hand tracking runs on this phone. No video is uploaded.</div>
+        <button id="startBtn">Start</button>
         <div id="err"></div>
       </div>
     </div>
   </div>
 
-  <footer>
-    <button id="modeBtn">Mode: Sign</button>
-    <button id="flipBtn">Flip camera</button>
+  <div id="transcript" aria-live="polite">
+    <div class="hint" id="hint">Raise your hands to sign. Lower them when you finish a line.</div>
+  </div>
+
+  <footer class="debug-only">
+    <button id="modeBtn">Mode: Auto</button>
     <button id="recordBtn" disabled>Record</button>
     <button id="pauseBtn" disabled>Pause</button>
     <button id="handBtn">Hand: Right</button>
+    <button id="speakBtn">Speak: off</button>
     <button id="vocabBtn">Vocab</button>
+    <button id="clearBtn">Clear</button>
   </footer>
+  <div id="debugPanel" class="debug-only"></div>
   <dialog id="vocabDialog" style="max-width:90vw;max-height:80vh;overflow:auto;">
     <p><strong>Signs the model knows</strong> (anything else shows as “?”)</p>
     <p id="vocabList" style="font-size:14px;line-height:1.5;"></p>
@@ -224,6 +204,47 @@ import {
   FilesetResolver
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
+// ============================================================
+// SETTINGS — every tunable number can be overridden from the URL, so thresholds
+// can be tuned on a phone without a new deploy, e.g.
+//   ?debug=1&spellMinConf=0.55&lineEndMs=800
+// ============================================================
+const params = new URLSearchParams(location.search);
+const DEBUG = params.has("debug") && params.get("debug") !== "0";
+function numParam(name, def) {
+  const v = parseFloat(params.get(name));
+  return Number.isFinite(v) ? v : def;
+}
+const CFG = {
+  // a line ends when no hand has been in the signing area for this long
+  lineEndMs: numParam("lineEndMs", 700),
+  // fingerspelling stays in a small area: dominant-wrist spread / shoulder width
+  spellMaxTravel: numParam("spellMaxTravel", 0.5),
+  // share of hands-up frames with only one hand up
+  spellMinOneHand: numParam("spellMinOneHand", 0.8),
+  // average top-1 letter-model confidence on the dominant hand
+  spellMinConf: numParam("spellMinConf", 0.6),
+  // a fingerspelled line has at least this many letters
+  spellMinLetters: numParam("spellMinLetters", 2),
+  // a letter = the same smoothed letter for at least this many frames
+  letterMinFrames: numParam("letterMinFrames", 6),
+  // sign segments below this confidence show as "?"
+  signConfMin: numParam("signConfMin", 0.40),
+  // signing area: wrist above shoulder-line + signArea × (hip-line − shoulder-line)
+  signArea: numParam("signArea", 0.9),
+};
+let dominantHand = (params.get("hand") || "R").toUpperCase().startsWith("L") ? "Left" : "Right";
+let speakOn = params.get("speak") === "1";
+if (DEBUG) {
+  document.body.classList.add("debug");
+  // on-screen console for debugging on the phone
+  const s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/npm/eruda@3.4.1/eruda.js";
+  s.onload = () => window.eruda?.init();
+  document.head.appendChild(s);
+}
+const dlog = (...a) => { if (DEBUG) console.log(...a); };
+
 const video = document.getElementById("video");
 const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
@@ -235,11 +256,13 @@ const errEl = document.getElementById("err");
 const fpsEl = document.getElementById("fps");
 const handCountEl = document.getElementById("handCount");
 const poseStatusEl = document.getElementById("poseStatus");
-const recStateEl = document.getElementById("recState");
-const outputTextEl = document.getElementById("outputText");
-const liveLetterEl = document.getElementById("liveLetter");
 const modeBtn = document.getElementById("modeBtn");
 const recordBtn = document.getElementById("recordBtn");
+const speakBtn = document.getElementById("speakBtn");
+const indicatorEl = document.getElementById("indicator");
+const indicatorTextEl = document.getElementById("indicatorText");
+const transcriptEl = document.getElementById("transcript");
+const debugPanelEl = document.getElementById("debugPanel");
 
 // ============================================================
 // LANDMARK VECTOR LAYOUT — must exactly match the Python training pipeline:
@@ -323,7 +346,7 @@ function normalizeHand(vec63) {
   return out;
 }
 
-// ---- motion magnitude (for both segmentation and auto start/stop) ----
+// ---- motion magnitude (used by segmentation) ----
 function frameMotion(prevVec, vec) {
   // mean velocity across both hands (126 values = 42 points x 3)
   let sum = 0;
@@ -372,47 +395,6 @@ function segmentClip(frames, minSegmentLen = 3, smoothingWindow = 3, minValleyDi
   return segments.length ? segments : [frames];
 }
 
-// ---- recording state machine (sign-activity detection) ----
-const MOTION_START_THRESHOLD = 0.015;   // tune against real device/lighting
-const MOTION_STOP_THRESHOLD = 0.008;
-const START_DEBOUNCE_MS = 300;
-const STOP_HANGOVER_MS = 1300;
-const MAX_RECORDING_MS = 20000;
-
-let recState = "idle"; // idle | recording
-let frameBuffer = [];
-let prevRawVec = null;
-let aboveThresholdSince = null;
-let belowThresholdSince = null;
-let recordingStartedAt = null;
-let manualOverride = false; // true while using the Record button directly
-let mode = "sign"; // "sign" | "spell"
-
-// fingerspelling hold-detection state
-let letterHoldCandidate = null;
-let letterHoldSince = null;
-// Fluent fingerspelling runs ~150-250 ms per letter, so 500 ms dropped most letters.
-const LETTER_HOLD_MS = 200;
-// The same letter isn't committed twice in a row (a slow hold would otherwise give
-// "AAA"). Cleared when the hand leaves view. Real double letters (the "LL" in
-// "hello") come out single; word correction restores them.
-let lastCommittedLetter = null;
-let currentWord = "";
-let dictionary = null; // general English (english_dictionary.json) merged with STEM (stem_dictionary.json)
-
-// Which hand the signer fingerspells with. MediaPipe labels the hand as the
-// signer sees it on this camera (confirmed: a raised right hand shows orange = "Right").
-let dominantHand = "Right";
-
-// Fingerspelling: finalize the current word when no hand is seen for this long
-// (real fingerspellers mark word ends by pausing/dropping the hand, not a "space" sign).
-const WORD_END_NO_HAND_MS = 900;
-let noHandSince = null;
-
-// Sign mode: segments whose top guess is below this are shown as "?" instead of
-// a confident-looking wrong word. 0.15 was far too permissive.
-const SIGN_CONFIDENCE_MIN = 0.40;
-
 // Aspect-ratio correction. MediaPipe x/y are fractions of the frame width/height,
 // so hand shapes are stretched differently on a portrait phone (e.g. 480x640)
 // than in the training media. Fingerspelling training images were 200x200 (aspect 1).
@@ -421,6 +403,7 @@ const SIGN_CONFIDENCE_MIN = 0.40;
 const TRAIN_ASPECT_FS = 1.0;
 const TRAIN_ASPECT_SIGN = 4 / 3;
 
+let dictionary = null; // general English (english_dictionary.json) merged with STEM (stem_dictionary.json)
 Promise.all([
   fetch("models/english_dictionary.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
   fetch("models/stem_dictionary.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
@@ -441,8 +424,6 @@ function aspectFactor(trainAspect) {
 let handLandmarker, poseLandmarker;
 
 // ---- ONNX model setup ----
-// Adjust these paths to wherever you placed the .onnx files in your repo
-// (e.g. a "models/" folder next to this HTML file on GitHub Pages).
 const SIGN_MODEL_PATH = "models/stat_sign_model.onnx";
 const FINGERSPELL_MODEL_PATH = "models/stat_fingerspelling_model.onnx";
 
@@ -451,8 +432,7 @@ let fingerspellSession = null;
 const onnxStatusEl = document.getElementById("onnxStatus");
 
 async function loadOnnxModels() {
-  // wasm files are resolved relative to the ort.min.js CDN URL automatically;
-  // no extra config needed for the common case.
+  // wasm files are resolved relative to the ort.min.js CDN URL automatically
   signSession = await ort.InferenceSession.create(SIGN_MODEL_PATH, {
     executionProviders: ["wasm"],
   });
@@ -460,29 +440,16 @@ async function loadOnnxModels() {
     executionProviders: ["wasm"],
   });
 
-  // --- confirmation run: dummy input through each model, just to prove
-  // the session is live and the input/output shapes line up as expected.
-  // This does NOT validate the model is numerically correct (that was
-  // already confirmed against PyTorch in Colab) — it only confirms the
-  // browser can actually load and run it.
-
-  // whole-sign model: [1, T, 150], T is dynamic — use T=20 as a dummy
+  // confirmation run: dummy input through each model, to prove the session is
+  // live and the input/output shapes line up (numerical correctness was already
+  // checked against PyTorch in Colab)
   const dummyT = 20;
-  const signInput = new ort.Tensor(
-    "float32",
-    new Float32Array(1 * dummyT * 150), // all zeros
-    [1, dummyT, 150]
-  );
+  const signInput = new ort.Tensor("float32", new Float32Array(1 * dummyT * 150), [1, dummyT, 150]);
   const signResult = await signSession.run({ landmarks: signInput });
   const signLogits = signResult.logits.data;
   console.log(`sign model: output shape OK, ${signLogits.length} classes`);
 
-  // fingerspelling model: [1, 63]
-  const fsInput = new ort.Tensor(
-    "float32",
-    new Float32Array(1 * 63),
-    [1, 63]
-  );
+  const fsInput = new ort.Tensor("float32", new Float32Array(1 * 63), [1, 63]);
   const fsResult = await fingerspellSession.run({ landmarks: fsInput });
   const fsLogits = fsResult.logits.data;
   console.log(`fingerspelling model: output shape OK, ${fsLogits.length} classes`);
@@ -511,6 +478,7 @@ const POSE_CONNECTIONS = [
   [11,12],[11,13],[13,15],[12,14],[14,16],
   [11,23],[12,24],[23,24]
 ];
+const COLORS = { Left: "#4fd1c5", Right: "#f0a35a", pose: "#6e9bf7" };
 
 async function loadModels() {
   const fileset = await FilesetResolver.forVisionTasks(
@@ -584,11 +552,23 @@ function drawConnections(points, connections, color) {
 // in training. Loaded from JSON so this file doesn't need hardcoded label arrays.
 let signClasses = null;
 let fingerspellClasses = null;
+let letterIdx = null; // indexes of the 26 real letters (drops Kaggle's "del"/"space", which aren't ASL)
 Promise.all([
   fetch("models/sign_classes.json").then(r => r.json()),
   fetch("models/fingerspell_classes.json").then(r => r.json()),
-]).then(([s, f]) => { signClasses = s; fingerspellClasses = f; })
-  .catch(() => console.log("class label files not found — add models/sign_classes.json and models/fingerspell_classes.json"));
+]).then(([s, f]) => {
+  signClasses = s;
+  fingerspellClasses = f;
+  letterIdx = f.map((c, i) => [c, i]).filter(([c]) => /^[A-Z]$/.test(c)).map(([, i]) => i);
+}).catch(() => console.log("class label files not found — add models/sign_classes.json and models/fingerspell_classes.json"));
+
+let phraseRules = [];
+let topics = [];
+fetch("models/phrase_rules.json").then(r => r.json()).then(j => {
+  phraseRules = j.rules.map(r => ({ ...r, pattern: r.signs.split(/\s+/) }));
+}).catch(e => console.error("phrase_rules.json", e));
+fetch("models/topic_diagrams.json").then(r => r.json()).then(j => { topics = j.topics; })
+  .catch(e => console.error("topic_diagrams.json", e));
 
 async function classifySignSegment(segmentFrames, k = 5) {
   const T = segmentFrames.length;
@@ -600,20 +580,23 @@ async function classifySignSegment(segmentFrames, k = 5) {
   return topK(logits, signClasses, k);
 }
 
-async function classifyLetter(handVec63, k = 3) {
-  // The training photos were all one hand seen from one side. Rather than guess
-  // whether the live hand matches that chirality, classify both the hand and its
-  // mirror image and keep whichever the model is more confident about.
+// Letter probabilities over A–Z for one hand. The training photos were all one hand
+// seen from one side, so classify the hand and its mirror image and keep whichever
+// the model is more confident about.
+async function letterProbs(handVec63) {
   const norm = normalizeHand(handVec63);
   const mirrored = new Float32Array(norm);
   for (let i = 0; i < 21; i++) mirrored[i * 3] = -mirrored[i * 3];
-
   const run = async (v) => {
     const result = await fingerspellSession.run({ landmarks: new ort.Tensor("float32", v, [1, 63]) });
-    return topK(result.logits.data, fingerspellClasses, k);
+    const p = softmax(Array.from(result.logits.data));
+    const letters = letterIdx.map(i => p[i]);
+    const sum = letters.reduce((a, b) => a + b, 0) || 1;
+    return letters.map(x => x / sum);
   };
-  const [a, b] = await Promise.all([run(norm), run(mirrored)]);
-  return a[0][1] >= b[0][1] ? a : b;
+  const a = await run(norm);
+  const b = await run(mirrored);
+  return Math.max(...a) >= Math.max(...b) ? a : b;
 }
 
 function softmax(logits) {
@@ -632,8 +615,9 @@ function topK(logits, classes, k) {
 
 // ---- word correction: confidence-weighted edit distance + dictionary frequency ----
 // Port of infer_word() from the Colab notebook.
-// The app never commits the same letter twice in a row, so "look" arrives as "lok".
-// Restoring the second letter of a double is nearly free.
+
+// Double letters (the LL in "cell") often come out as one letter run, so
+// restoring the second letter of a double is nearly free.
 const DOUBLE_LETTER_COST = 0.1;
 
 function levenshteinWeighted(raw, candidate, letterCandidates, cutoff = Infinity) {
@@ -685,7 +669,373 @@ function inferWord(letterCandidates) {
   if (!best) return { word: raw, confidence: 0 };
   return { word: best, confidence: 1 / (1 + bestScore) };
 }
+// ---- end word correction ----
 
+// ============================================================
+// PER-FRAME ANALYSIS
+// ============================================================
+// Is a wrist in the signing area? Above a line between the shoulders and hips
+// (image y grows downward). Without a pose, any visible hand counts.
+function signingAreaY(poseLm) {
+  if (!poseLm) return Infinity;
+  const shY = (poseLm[11].y + poseLm[12].y) / 2;
+  const hipY = (poseLm[23].y + poseLm[24].y) / 2;
+  return shY + CFG.signArea * (hipY - shY);
+}
+
+function analyzeFrame(handResult, poseResult, t) {
+  const poseLm = poseResult.landmarks[0] || null;
+  const areaY = signingAreaY(poseLm);
+  const W = video.videoWidth || 1, H = video.videoHeight || 1;
+  const up = [];
+  handResult.landmarks.forEach((lm, i) => {
+    if (lm[0].y < areaY) up.push({ lm, label: handResult.handedness[i]?.[0]?.categoryName });
+  });
+  // the fingerspelling hand: the dominant one, or the only hand up
+  let dom = up.find(h => h.label === dominantHand) || (up.length === 1 ? up[0] : null);
+  let domHand63 = null, domWrist = null;
+  if (dom) {
+    const ax = aspectFactor(TRAIN_ASPECT_FS);
+    domHand63 = new Float32Array(63);
+    dom.lm.forEach((p, j) => { domHand63[j*3] = p.x * ax; domHand63[j*3+1] = p.y; domHand63[j*3+2] = p.z * ax; });
+    domWrist = [dom.lm[0].x * W, dom.lm[0].y * H]; // pixel units
+  }
+  // body scale in pixel units: shoulder width, or (no pose) ~3 hand lengths
+  let scale = null;
+  if (poseLm) scale = Math.hypot((poseLm[11].x - poseLm[12].x) * W, (poseLm[11].y - poseLm[12].y) * H);
+  else if (dom) scale = 3 * Math.hypot((dom.lm[9].x - dom.lm[0].x) * W, (dom.lm[9].y - dom.lm[0].y) * H);
+  return {
+    t,
+    rawVec: buildFrameVector(handResult, poseResult),
+    handsUp: up.length,
+    domHand63,
+    domWrist,
+    scale,
+  };
+}
+
+// ============================================================
+// LINE DETECTION — a line starts when a hand rises into the signing area and
+// ends when no hand has been in it for lineEndMs. (Holding a fingerspelled letter
+// is low motion, so a motion-based stop used to cut words in half.)
+// ============================================================
+const MAX_RECORDING_MS = 20000; // safety limit
+const MIN_LINE_MS = 250;        // shorter blips (a hand passing through) are ignored
+let line = null;                // { frames, startedAt, lastUpAt, lastUpIndex, firstUpAt }
+let manualRecording = false;    // debug Record button
+let modeOverride = "auto";      // debug: auto | sign | spell
+let processing = Promise.resolve();
+let busyCount = 0;
+
+function lineFrame(f) {
+  const up = f.handsUp > 0;
+  if (!line) {
+    if (!up && !manualRecording) return;
+    line = { frames: [], startedAt: f.t, lastUpAt: f.t, lastUpIndex: 0 };
+    updateIndicator();
+  }
+  line.frames.push(f);
+  if (up || manualRecording) { line.lastUpAt = f.t; line.lastUpIndex = line.frames.length; }
+  if (manualRecording) {
+    if (f.t - line.startedAt > MAX_RECORDING_MS) stopManual();
+    return;
+  }
+  if (f.t - line.lastUpAt >= CFG.lineEndMs || f.t - line.startedAt > MAX_RECORDING_MS) endLine();
+}
+
+function endLine() {
+  const l = line;
+  line = null;
+  updateIndicator();
+  if (!l) return;
+  const frames = l.frames.slice(0, l.lastUpIndex); // drop the hands-down tail
+  if (frames.length < 3 || frames[frames.length - 1].t - frames[0].t < MIN_LINE_MS) return;
+  busyCount++;
+  updateIndicator();
+  processing = processing
+    .then(() => processLine(frames))
+    .catch(e => { console.error(e); })
+    .finally(() => { busyCount--; updateIndicator(); });
+}
+
+function updateIndicator() {
+  const state = line ? "listening" : busyCount > 0 ? "thinking" : "ready";
+  indicatorEl.className = state;
+  indicatorTextEl.textContent = { listening: "Listening", thinking: "Thinking…", ready: "Ready" }[state];
+}
+
+// ============================================================
+// LINE PROCESSING — decide sign vs. fingerspelling, then decode
+// ============================================================
+const percentile = (arr, q) => {
+  const a = [...arr].sort((x, y) => x - y);
+  return a[Math.min(a.length - 1, Math.max(0, Math.round(q * (a.length - 1))))];
+};
+const median = arr => percentile(arr, 0.5);
+const LETTER_SMOOTH = 5;           // majority filter window (frames)
+const DOUBLE_LETTER_MOVE = 0.12;   // wrist moves this much (× shoulder width) between two runs of a double letter
+
+async function processLine(frames) {
+  // letter model on the dominant hand of every frame
+  const probs = [];
+  for (const f of frames) probs.push(f.domHand63 ? await letterProbs(f.domHand63) : null);
+
+  const upFrames = frames.filter(f => f.handsUp > 0);
+  const oneHand = upFrames.length ? upFrames.filter(f => f.handsUp === 1).length / upFrames.length : 0;
+  const wristed = frames.filter(f => f.domWrist);
+  const scale = median(frames.filter(f => f.scale).map(f => f.scale)) || 1;
+  let travel = Infinity;
+  if (wristed.length >= 3) {
+    // 10th–90th percentile spread, so raising and lowering the hand barely counts
+    const xs = wristed.map(f => f.domWrist[0]), ys = wristed.map(f => f.domWrist[1]);
+    travel = Math.hypot(percentile(xs, 0.9) - percentile(xs, 0.1), percentile(ys, 0.9) - percentile(ys, 0.1)) / scale;
+  }
+  const tops = probs.filter(Boolean).map(p => Math.max(...p));
+  const letterConf = tops.length ? tops.reduce((a, b) => a + b, 0) / tops.length : 0;
+  const spelled = decodeSpelling(frames, probs, scale);
+
+  const features = {
+    frames: frames.length,
+    ms: Math.round(frames[frames.length - 1].t - frames[0].t),
+    travel: +travel.toFixed(2),
+    oneHand: +oneHand.toFixed(2),
+    letterConf: +letterConf.toFixed(2),
+    letters: spelled.runs.length,
+  };
+  const autoSpell = travel < CFG.spellMaxTravel && oneHand >= CFG.spellMinOneHand &&
+    letterConf >= CFG.spellMinConf && spelled.runs.length >= CFG.spellMinLetters;
+  const kind = modeOverride === "auto" ? (autoSpell ? "spell" : "sign") : modeOverride;
+
+  let entry, details;
+  if (kind === "spell") {
+    if (!spelled.runs.length) {
+      entry = { tokens: [], raw: "(no letters held long enough)" };
+    } else {
+      const { word } = inferWord(spelled.runs.map(r => r.top3));
+      entry = { tokens: [word], raw: spelled.runs.map(r => r.letter).join("-") };
+    }
+    details = spelled.runs.map(r => `${r.letter} ×${r.len}: ` + r.top3.map(([l, p]) => `${l} ${(p * 100).toFixed(0)}%`).join(", "));
+  } else {
+    const segments = segmentClip(frames.map(f => f.rawVec));
+    const tokens = [];
+    details = [];
+    for (const seg of segments) {
+      const top = await classifySignSegment(seg);
+      details.push(`seg ×${seg.length}: ` + top.slice(0, 3).map(([w, p]) => `${w} ${(p * 100).toFixed(0)}%`).join(", "));
+      tokens.push(top[0][1] >= CFG.signConfMin ? top[0][0] : "?"); // "?" = a sign the model doesn't know well
+    }
+    entry = { tokens, raw: tokens.join("  ") };
+  }
+  entry.kind = kind;
+
+  const decision = `${kind.toUpperCase()}${modeOverride === "auto" ? " (auto)" : " (forced)"} ` + JSON.stringify(features);
+  dlog("line:", decision, details);
+  lastLineDebug = `${decision}\n${details.join("\n")}`;
+  renderDebug();
+  addLine(entry);
+}
+
+// Fingerspelling line → letters. Smooth the per-frame top letter, keep runs of the
+// same letter lasting ≥ letterMinFrames, and merge two runs of the same letter
+// unless the wrist moved between them (how a double letter like the LL in CELL is signed).
+function decodeSpelling(frames, probs, scale) {
+  const labels = probs.map(p => p ? p.indexOf(Math.max(...p)) : -1);
+  const half = Math.floor(LETTER_SMOOTH / 2);
+  const smoothed = labels.map((_, i) => {
+    const counts = new Map();
+    for (let k = Math.max(0, i - half); k <= Math.min(labels.length - 1, i + half); k++) {
+      counts.set(labels[k], (counts.get(labels[k]) || 0) + 1);
+    }
+    let best = labels[i], bestN = 0;
+    for (const [l, n] of counts) if (n > bestN || (n === bestN && l === labels[i])) { best = l; bestN = n; }
+    return best;
+  });
+
+  const runs = [];
+  for (let i = 0; i < smoothed.length; ) {
+    let j = i;
+    while (j < smoothed.length && smoothed[j] === smoothed[i]) j++;
+    if (smoothed[i] >= 0 && j - i >= CFG.letterMinFrames) runs.push({ label: smoothed[i], start: i, end: j });
+    i = j;
+  }
+
+  const merged = [];
+  for (const r of runs) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.label === r.label) {
+      const a = frames[prev.end - 1].domWrist, b = frames[r.start].domWrist;
+      const moved = a && b ? Math.hypot(a[0] - b[0], a[1] - b[1]) / scale : 0;
+      if (moved < DOUBLE_LETTER_MOVE) { prev.end = r.end; continue; }
+    }
+    merged.push({ ...r });
+  }
+
+  const letters = letterIdx.map(i => fingerspellClasses[i]);
+  return {
+    runs: merged.map(r => {
+      const avg = new Array(letters.length).fill(0);
+      let n = 0;
+      for (let k = r.start; k < r.end; k++) if (probs[k]) { probs[k].forEach((p, i) => { avg[i] += p; }); n++; }
+      const top3 = avg.map((p, i) => [letters[i], p / n]).sort((x, y) => y[1] - x[1]).slice(0, 3);
+      return { letter: letters[r.label], len: r.end - r.start, top3 };
+    }),
+  };
+}
+
+// ============================================================
+// SIGNS → ENGLISH (rule list in models/phrase_rules.json) and TRANSCRIPT
+// ============================================================
+const CONTEXT_MS = 6000; // a line can complete the line before it within this time
+const transcript = [];
+const normTok = s => s.toUpperCase().replace(/[^A-Z]/g, "");
+const asWord = t => t.toLowerCase();
+
+function applyRules(tokens) {
+  const toks = tokens.filter(t => t !== "?");
+  for (const rule of phraseRules) {
+    if (rule.pattern.length !== toks.length) continue;
+    let x = null, ok = true;
+    rule.pattern.forEach((p, i) => {
+      if (p === "{X}") x = toks[i];
+      else if (normTok(p) !== normTok(toks[i])) ok = false;
+    });
+    if (ok) return { english: rule.english.replace("{X}", x ? asWord(x) : ""), rule: rule.signs };
+  }
+  return null;
+}
+
+function plainEnglish(tokens) {
+  const words = tokens.filter(t => t !== "?").map(asWord);
+  if (!words.length) return "(sign not recognized)";
+  const s = words.join(" ");
+  return s[0].toUpperCase() + s.slice(1);
+}
+
+function addLine(entry) {
+  const now = performance.now();
+  entry.time = now;
+  const prev = transcript[transcript.length - 1];
+  // e.g. F-O-R-C-E (one line), then MEAN (the next line) → "What does force mean?"
+  if (prev && !prev.merged && !prev.rule && entry.tokens.length && now - prev.time < CONTEXT_MS) {
+    const both = applyRules([...prev.tokens, ...entry.tokens]);
+    if (both && !applyRules(entry.tokens)) {
+      Object.assign(prev, {
+        tokens: [...prev.tokens, ...entry.tokens],
+        raw: `${prev.raw}  ${entry.raw}`,
+        english: both.english, rule: both.rule, merged: true, time: now,
+      });
+      finishLine(prev);
+      return;
+    }
+  }
+  const r = applyRules(entry.tokens);
+  entry.english = r ? r.english : plainEnglish(entry.tokens);
+  entry.rule = r?.rule || null;
+  transcript.push(entry);
+  finishLine(entry);
+}
+
+function finishLine(entry) {
+  dlog("english:", entry.english, "| rule:", entry.rule || "none", "| raw:", entry.raw);
+  renderTranscript();
+  maybeShowDiagram(entry.tokens);
+  if (speakOn && entry.tokens.some(t => t !== "?")) speak(entry.english);
+}
+
+function renderTranscript() {
+  transcriptEl.replaceChildren();
+  const last = transcript.slice(-3);
+  if (!last.length) {
+    const h = document.createElement("div");
+    h.className = "hint";
+    h.textContent = "Raise your hands to sign. Lower them when you finish a line.";
+    transcriptEl.appendChild(h);
+  }
+  last.forEach((e, i) => {
+    const div = document.createElement("div");
+    div.className = "entry" + (i === last.length - 1 ? " latest" : "");
+    const en = document.createElement("div");
+    en.className = "en";
+    en.textContent = e.english;
+    const raw = document.createElement("div");
+    raw.className = "raw";
+    raw.textContent = e.raw;
+    div.append(en, raw);
+    transcriptEl.appendChild(div);
+  });
+}
+
+// ============================================================
+// TOPIC DIAGRAMS (Mermaid, loaded only when first needed)
+// ============================================================
+const MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+let mermaidP = null;
+let diagramCount = 0;
+const diagramEl = document.getElementById("diagram");
+
+function loadMermaid() {
+  mermaidP ??= import(MERMAID_URL).then(m => {
+    const mermaid = m.default;
+    mermaid.initialize({
+      startOnLoad: false, theme: "dark", securityLevel: "strict",
+      themeVariables: { fontSize: "17px" },
+      flowchart: { useMaxWidth: true, nodeSpacing: 18, rankSpacing: 28, wrappingWidth: 170 },
+    });
+    return mermaid;
+  });
+  return mermaidP;
+}
+
+async function maybeShowDiagram(tokens) {
+  const words = tokens.filter(t => t !== "?").map(asWord);
+  const topic = topics.find(tp => tp.keywords.some(k => words.includes(k)));
+  if (!topic) return;
+  try {
+    const mermaid = await loadMermaid();
+    // topic text is fixed content from topic_diagrams.json; recognized text never goes into Mermaid source
+    const { svg } = await mermaid.render(`dg${++diagramCount}`, topic.mermaid);
+    document.getElementById("diagramTitle").textContent = topic.title;
+    document.getElementById("diagramBody").innerHTML = svg;
+    diagramEl.classList.add("shown");
+  } catch (e) {
+    console.error("diagram", e);
+  }
+}
+document.getElementById("diagramClose").addEventListener("click", () => diagramEl.classList.remove("shown"));
+
+// ============================================================
+// READ ALOUD (browser speechSynthesis; off by default)
+// ============================================================
+function speak(text) {
+  if (!("speechSynthesis" in window)) return;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+// iOS only plays speech that started from a tap; call this inside a tap handler
+function unlockSpeech() {
+  if (!("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(" ");
+  u.volume = 0;
+  speechSynthesis.speak(u);
+}
+function updateSpeakBtn() { speakBtn.textContent = `Speak: ${speakOn ? "on" : "off"}`; speakBtn.classList.toggle("active", speakOn); }
+
+// ============================================================
+// DEBUG PANEL
+// ============================================================
+let lastLineDebug = "(no line yet)";
+function renderDebug() {
+  if (!DEBUG) return;
+  debugPanelEl.textContent =
+    `settings: ${JSON.stringify(CFG)} hand=${dominantHand} speak=${speakOn} mode=${modeOverride}\n` +
+    `spell if travel<${CFG.spellMaxTravel} & oneHand≥${CFG.spellMinOneHand} & letterConf≥${CFG.spellMinConf} & letters≥${CFG.spellMinLetters}\n` +
+    `last line: ${lastLineDebug}`;
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+let lastLogAt = 0;
 function loop() {
   if (!running) return;
   if (paused) {
@@ -696,187 +1046,37 @@ function loop() {
   const now = performance.now();
   const dt = now - lastFrameTime;
   lastFrameTime = now;
-  const instFps = 1000 / dt;
-  fpsSmoothed = fpsSmoothed ? fpsSmoothed * 0.9 + instFps * 0.1 : instFps;
-  fpsEl.textContent = fpsSmoothed.toFixed(0);
+  fpsSmoothed = fpsSmoothed ? fpsSmoothed * 0.9 + (1000 / dt) * 0.1 : 1000 / dt;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const timestamp = now;
-  const handResult = handLandmarker.detectForVideo(video, timestamp);
-  const poseResult = poseLandmarker.detectForVideo(video, timestamp);
+  const handResult = handLandmarker.detectForVideo(video, now);
+  const poseResult = poseLandmarker.detectForVideo(video, now);
 
-  handCountEl.textContent = handResult.landmarks.length;
-  if (Math.round(now) % 1000 < 20) { // log roughly once a second, not every frame
-    console.log(`video: ${video.videoWidth}x${video.videoHeight}, facing: ${facingMode}, hands: ${handResult.landmarks.length}`);
-  }
   handResult.landmarks.forEach((lm, i) => {
-    const handedness = handResult.handedness[i]?.[0]?.categoryName;
-    const color = handedness === "Left" ? "var(--hand-left)" : "var(--hand-right)";
-    const resolved = getComputedStyle(document.documentElement)
-      .getPropertyValue(handedness === "Left" ? "--hand-left" : "--hand-right").trim();
-    drawConnections(lm, HAND_CONNECTIONS, resolved);
-    drawPoints(lm, resolved, 3);
+    const color = COLORS[handResult.handedness[i]?.[0]?.categoryName === "Left" ? "Left" : "Right"];
+    drawConnections(lm, HAND_CONNECTIONS, color);
+    drawPoints(lm, color, 3);
   });
 
-  if (poseResult.landmarks.length) {
-    poseStatusEl.textContent = "tracking";
-    const poseColor = getComputedStyle(document.documentElement).getPropertyValue("--pose").trim();
+  const f = analyzeFrame(handResult, poseResult, now);
+  lineFrame(f);
+
+  if (DEBUG) {
+    fpsEl.textContent = fpsSmoothed.toFixed(0);
+    handCountEl.textContent = `${f.handsUp}/${handResult.landmarks.length}`;
+    poseStatusEl.textContent = poseResult.landmarks.length ? "tracking" : "none";
     poseResult.landmarks.forEach(lm => {
-      drawConnections(lm, POSE_CONNECTIONS, poseColor);
-      const upperBodyPoints = [11,12,13,14,15,16,23,24].map(i => lm[i]).filter(Boolean);
-      drawPoints(upperBodyPoints, poseColor, 4);
+      drawConnections(lm, POSE_CONNECTIONS, COLORS.pose);
+      drawPoints(POSE_SUBSET_ORDER.map(i => lm[i]).filter(Boolean), COLORS.pose, 4);
     });
-  } else {
-    poseStatusEl.textContent = "none";
-  }
-
-  // ---- build this frame's 150-vector and run mode-specific logic ----
-  const rawVec = buildFrameVector(handResult, poseResult);
-
-  if (mode === "sign") {
-    runSignModeFrame(rawVec, now);
-  } else {
-    runSpellModeFrame(handResult, now);
+    if (now - lastLogAt > 1000) {
+      lastLogAt = now;
+      console.log(`video: ${video.videoWidth}x${video.videoHeight}, facing: ${facingMode}, hands: ${handResult.landmarks.length}, up: ${f.handsUp}`);
+    }
   }
 
   requestAnimationFrame(loop);
-}
-
-function runSignModeFrame(rawVec, now) {
-  const motion = prevRawVec ? frameMotion(prevRawVec, rawVec) : 0;
-  prevRawVec = rawVec;
-
-  if (!manualOverride) {
-    if (recState === "idle") {
-      if (motion > MOTION_START_THRESHOLD) {
-        if (aboveThresholdSince === null) aboveThresholdSince = now;
-        if (now - aboveThresholdSince >= START_DEBOUNCE_MS) startRecording(now);
-      } else {
-        aboveThresholdSince = null;
-      }
-    } else if (recState === "recording") {
-      if (motion < MOTION_STOP_THRESHOLD) {
-        if (belowThresholdSince === null) belowThresholdSince = now;
-        if (now - belowThresholdSince >= STOP_HANGOVER_MS) stopRecording();
-      } else {
-        belowThresholdSince = null;
-      }
-    }
-  }
-
-  if (recState === "recording") {
-    frameBuffer.push(rawVec);
-    if (now - recordingStartedAt > MAX_RECORDING_MS) stopRecording();
-  }
-}
-
-function startRecording(now) {
-  recState = "recording";
-  recStateEl.textContent = "recording";
-  frameBuffer = [];
-  recordingStartedAt = now;
-  belowThresholdSince = null;
-  outputTextEl.textContent = "Listening…";
-}
-
-async function stopRecording() {
-  recState = "idle";
-  recStateEl.textContent = "processing…";
-  aboveThresholdSince = null;
-  belowThresholdSince = null;
-  const frames = frameBuffer;
-  frameBuffer = [];
-
-  if (frames.length < 3) {
-    recStateEl.textContent = "idle";
-    return;
-  }
-
-  try {
-    const segments = segmentClip(frames);
-    const words = [];
-    let known = 0;
-    for (const seg of segments) {
-      const top5 = await classifySignSegment(seg);
-      console.log("segment top5:", top5.map(([w, p]) => `${w} ${(p*100).toFixed(0)}%`).join(", "));
-      if (top5[0][1] >= SIGN_CONFIDENCE_MIN) { words.push(top5[0][0]); known++; }
-      else words.push("?"); // a sign happened, but it isn't one the model knows well
-    }
-    outputTextEl.textContent = known
-      ? words.join(" ")
-      : "(no signs from the known vocabulary recognized — try again)";
-  } catch (e) {
-    console.error(e);
-    outputTextEl.textContent = "Error during recognition — see console.";
-  }
-  recStateEl.textContent = "idle";
-}
-
-async function runSpellModeFrame(handResult, now) {
-  if (handResult.landmarks.length === 0) {
-    letterHoldCandidate = null;
-    letterHoldSince = null;
-    liveLetterEl.textContent = "";
-    lastCommittedLetter = null;
-    // hand dropped out of view for a moment = end of the word
-    if (noHandSince === null) noHandSince = now;
-    else if (currentWord && now - noHandSince >= WORD_END_NO_HAND_MS) finalizeWord();
-    return;
-  }
-  noHandSince = null;
-
-  // Use the signer's dominant hand, not whichever hand MediaPipe happened to list
-  // first — with both hands in view, [0] was often the resting hand.
-  let idx = handResult.handedness.findIndex(h => h?.[0]?.categoryName === dominantHand);
-  if (idx === -1) {
-    if (handResult.landmarks.length > 1) return; // two hands, neither labeled dominant: skip frame
-    idx = 0;
-  }
-  const lm = handResult.landmarks[idx];
-  const ax = aspectFactor(TRAIN_ASPECT_FS);
-  const vec63 = new Float32Array(63);
-  lm.forEach((p, j) => { vec63[j*3] = p.x * ax; vec63[j*3+1] = p.y; vec63[j*3+2] = p.z * ax; });
-
-  const top3 = await classifyLetter(vec63);
-  const [letter, conf] = top3[0];
-  liveLetterEl.textContent = `${letter.toUpperCase()} (${(conf*100).toFixed(0)}%)`;
-
-  // "space"/"del" are Kaggle gestures, not ASL; never commit them. Word ends come
-  // from the hand leaving view (WORD_END_NO_HAND_MS).
-  if (letter === "space" || letter === "del" || letter === lastCommittedLetter) {
-    letterHoldCandidate = null;
-    letterHoldSince = null;
-    return;
-  }
-
-  if (letter === letterHoldCandidate) {
-    if (now - letterHoldSince >= LETTER_HOLD_MS) {
-      commitLetter(letter, top3);
-      letterHoldCandidate = null; // require releasing the hold before re-committing
-      letterHoldSince = null;
-    }
-  } else {
-    letterHoldCandidate = letter;
-    letterHoldSince = now;
-  }
-}
-
-let pendingLetterCandidates = [];
-
-function commitLetter(letter, top3) {
-  lastCommittedLetter = letter;
-  currentWord += letter;
-  pendingLetterCandidates.push(top3);
-  outputTextEl.textContent = currentWord;
-}
-
-function finalizeWord() {
-  if (!currentWord) return;
-  const { word, confidence } = inferWord(pendingLetterCandidates);
-  outputTextEl.textContent = `${word} (raw: "${currentWord}", conf ${(confidence*100).toFixed(0)}%)`;
-  currentWord = "";
-  pendingLetterCandidates = [];
 }
 
 async function init() {
@@ -887,11 +1087,15 @@ async function init() {
     statusEl.classList.add("hidden");
     running = true;
     pauseBtn.disabled = false;
-    recordBtn.disabled = mode !== "sign";
+    recordBtn.disabled = false;
+    renderDebug();
     requestAnimationFrame(loop);
+    loadMermaid().catch(e => console.error("mermaid", e)); // preload so the first diagram appears quickly
   } catch (e) {
     console.error(e);
     onnxStatusEl.textContent = "failed";
+    startBtn.disabled = false;
+    startBtn.textContent = "Try again";
     errEl.textContent =
       e.name === "NotAllowedError"
         ? "Camera permission was denied. Allow camera access and reload."
@@ -899,21 +1103,10 @@ async function init() {
   }
 }
 
-document.getElementById("handBtn").addEventListener("click", (e) => {
-  dominantHand = dominantHand === "Right" ? "Left" : "Right";
-  e.target.textContent = `Hand: ${dominantHand}`;
-});
-
-document.getElementById("vocabBtn").addEventListener("click", () => {
-  document.getElementById("vocabList").textContent = signClasses
-    ? [...signClasses].sort().join(" · ")
-    : "Vocabulary list not loaded (models/sign_classes.json missing).";
-  document.getElementById("vocabDialog").showModal();
-});
-
 startBtn.addEventListener("click", () => {
   startBtn.disabled = true;
   startBtn.textContent = "Loading…";
+  if (speakOn) unlockSpeech();
   init();
 });
 
@@ -948,28 +1141,34 @@ flipBtn.addEventListener("click", async () => {
   }
 });
 
-modeBtn.addEventListener("click", () => {
-  mode = mode === "sign" ? "spell" : "sign";
-  modeBtn.textContent = `Mode: ${mode === "sign" ? "Sign" : "Spell"}`;
-  recordBtn.disabled = mode !== "sign";
-  liveLetterEl.textContent = "";
-  currentWord = "";
-  pendingLetterCandidates = [];
-  lastCommittedLetter = null;
-  outputTextEl.textContent = mode === "sign"
-    ? "Start signing — recording begins automatically."
-    : "Hold a letter steady to spell.";
+// ---- debug-only controls ----
+const handBtn = document.getElementById("handBtn");
+handBtn.textContent = `Hand: ${dominantHand}`;
+handBtn.addEventListener("click", () => {
+  dominantHand = dominantHand === "Right" ? "Left" : "Right";
+  handBtn.textContent = `Hand: ${dominantHand}`;
+  renderDebug();
 });
 
+modeBtn.addEventListener("click", () => {
+  modeOverride = { auto: "sign", sign: "spell", spell: "auto" }[modeOverride];
+  modeBtn.textContent = `Mode: ${modeOverride[0].toUpperCase()}${modeOverride.slice(1)}`;
+  modeBtn.classList.toggle("active", modeOverride !== "auto");
+  renderDebug();
+});
+
+function stopManual() {
+  manualRecording = false;
+  recordBtn.textContent = "Record";
+  endLine();
+}
 recordBtn.addEventListener("click", () => {
-  if (recState === "idle") {
-    manualOverride = true;
-    startRecording(performance.now());
+  if (!manualRecording) {
+    if (line) endLine();
+    manualRecording = true;
     recordBtn.textContent = "Stop";
   } else {
-    manualOverride = false;
-    recordBtn.textContent = "Record";
-    stopRecording();
+    stopManual();
   }
 });
 
@@ -978,12 +1177,36 @@ pauseBtn.addEventListener("click", () => {
   pauseBtn.textContent = paused ? "Resume" : "Pause";
 });
 
+updateSpeakBtn();
+speakBtn.addEventListener("click", () => {
+  speakOn = !speakOn;
+  if (speakOn) unlockSpeech();
+  updateSpeakBtn();
+  renderDebug();
+});
+
+document.getElementById("clearBtn").addEventListener("click", () => {
+  transcript.length = 0;
+  renderTranscript();
+  diagramEl.classList.remove("shown");
+});
+
+document.getElementById("vocabBtn").addEventListener("click", () => {
+  document.getElementById("vocabList").textContent = signClasses
+    ? [...signClasses].sort().join(" · ")
+    : "Vocabulary list not loaded (models/sign_classes.json missing).";
+  document.getElementById("vocabDialog").showModal();
+});
+
 window.addEventListener("resize", () => {
   if (video.videoWidth) {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
   }
 });
+
+// test hooks for the headless smoke test (debug mode only)
+if (DEBUG) window.__stat = { addLine, applyRules, inferWord, decodeSpelling, transcript };
 </script>
 </body>
 </html>

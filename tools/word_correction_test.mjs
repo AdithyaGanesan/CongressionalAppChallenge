@@ -25,7 +25,7 @@ const SHOW = Number(args.show ?? 8);       // example failures to print per leve
 // ---- load the app's word-correction code and dictionary exactly as index.html does ----
 const html = fs.readFileSync("index.html", "utf8");
 const start = html.indexOf("// ---- word correction");
-const end = html.indexOf("function loop()");
+const end = html.indexOf("// ---- end word correction");
 if (start < 0 || end < 0) throw new Error("couldn't find inferWord code in index.html");
 const eng = JSON.parse(fs.readFileSync("models/english_dictionary.json", "utf8"));
 const stem = JSON.parse(fs.readFileSync("models/stem_dictionary.json", "utf8"));
