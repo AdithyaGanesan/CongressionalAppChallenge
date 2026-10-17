@@ -12,6 +12,7 @@
 // versions of the correction code, not as real-world accuracy.
 //
 // Run from the repo root:  node tools/word_correction_test.mjs [--words 200] [--seed 1] [--show 10]
+// Expected-words snapping:  add --expect calibrate,sensors
 // Specific words, each tried --reps times:  node tools/word_correction_test.mjs --list calibrate,sensors --reps 50
 
 import fs from "node:fs";
@@ -33,7 +34,11 @@ const stem = JSON.parse(fs.readFileSync("models/stem_dictionary.json", "utf8"));
 const domain = args.nodomain ? {} : JSON.parse(fs.readFileSync("models/domain_words.json", "utf8"));
 const mergeSrc = html.match(/const merged = \{ \.\.\.eng \};[\s\S]*?dictionary = [^\n]*\n/)[0];
 const dictionary = new Function("eng", "stem", "domain", `let dictionary; ${mergeSrc}; return dictionary;`)(eng, stem, domain);
-const inferWord = new Function("dictionary", `${html.slice(start, end)}; return inferWord;`)(dictionary);
+const { inferWord, matchExpected } = new Function("dictionary", `${html.slice(start, end)}; return { inferWord, matchExpected };`)(dictionary);
+// --expect calibrate,sensors: test the expected-words snapping (maxFrac from --expectMaxEdit, default 0.5)
+const EXPECT = args.expect ? String(args.expect).split(",") : [];
+const EXPECT_MAX = Number(args.expectMaxEdit ?? 0.5);
+const correct = cands => (EXPECT.length && matchExpected(cands, EXPECT, EXPECT_MAX)) || inferWord(cands).word;
 
 // ---- seeded RNG so runs are repeatable ----
 let s = SEED >>> 0;
@@ -113,7 +118,7 @@ for (const lvl of LEVELS) {
       const cands = simulate(w, lvl);
       if (!cands.length) continue;
       const raw = cands.map(c => c[0][0].toLowerCase()).join("");
-      const { word } = inferWord(cands);
+      const word = correct(cands);
       calls++;
       if (raw === w) rawOk++;
       if (word === w) fixedOk++; else fails.push(`${w} -> "${raw}" -> ${word}`);

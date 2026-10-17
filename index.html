@@ -78,6 +78,11 @@
   #indicator .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
   #indicator.listening .dot { background: var(--listen); animation: pulse 1s infinite; }
   #indicator.thinking .dot { background: var(--think); animation: pulse 0.5s infinite; }
+  #expectNote {
+    position: absolute; top: 14px; right: 10px; z-index: 2; max-width: 55%;
+    background: rgba(13, 17, 23, 0.75); border: 1px solid var(--line); border-radius: 8px;
+    padding: 4px 8px; font-size: 12px; color: var(--muted); text-align: right;
+  }
   @keyframes pulse { 50% { opacity: 0.3; } }
   #hud {
     position: absolute; top: 48px; left: 10px; right: 10px;
@@ -160,6 +165,7 @@
     <video id="video" playsinline muted autoplay></video>
     <canvas id="overlay"></canvas>
     <div id="indicator"><span class="dot"></span><span id="indicatorText">Ready</span></div>
+    <div id="expectNote" hidden></div>
     <div id="hud" class="debug-only">
       <div class="pill"><b>FPS</b> <span id="fps">–</span></div>
       <div class="pill"><b>Hands up</b> <span id="handCount">0</span></div>
@@ -242,7 +248,10 @@ const CFG = {
   signPrefixMs: numParam("signPrefixMs", 450),
   // a fingerspelled line within this long (hands-down gap) of a line ending in a spelled word continues it
   joinMs: numParam("joinMs", 3000),
+  // expected words snap when edit distance ≤ this × word length
+  expectMaxEdit: numParam("expectMaxEdit", 0.5),
 };
+const EXPECTED = (params.get("expect") || "").toLowerCase().split(",").map(w => w.replace(/[^a-z]/g, "")).filter(Boolean);
 let dominantHand = (params.get("hand") || "R").toUpperCase().startsWith("L") ? "Left" : "Right";
 let speakOn = params.get("speak") === "1";
 if (DEBUG) {
@@ -254,6 +263,11 @@ if (DEBUG) {
   document.head.appendChild(s);
 }
 const dlog = (...a) => { if (DEBUG) console.log(...a); };
+if (EXPECTED.length) {
+  const note = document.getElementById("expectNote");
+  note.textContent = `Expecting: ${EXPECTED.join(", ")}`;
+  note.hidden = false;
+}
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("overlay");
@@ -683,6 +697,23 @@ function inferWord(letterCandidates) {
   if (!best) return { word: raw, confidence: 0 };
   return { word: best, confidence: 1 / (1 + bestScore) };
 }
+// Expected words: a teacher can tell STAT the lesson's words in advance
+// (?expect=calibrate,sensors), like hint phrases in speech recognition. A spelling
+// whose weighted edit distance to an expected word is at most maxFrac × the word's
+// length becomes that word. The raw letters are still shown, and the screen says
+// which words are expected.
+function matchExpected(letterCandidates, expected, maxFrac) {
+  const raw = letterCandidates.map(c => c[0][0].toLowerCase()).join("");
+  if (raw.length < 2) return null;
+  // a spelling that is already a real word is kept ("sense" never becomes "sensors")
+  if (dictionary?.[raw] && !expected.includes(raw)) return null;
+  let best = null, bestCost = Infinity;
+  for (const w of expected) {
+    const cost = levenshteinWeighted(raw, w, letterCandidates);
+    if (cost <= maxFrac * w.length && cost < bestCost) { best = w; bestCost = cost; }
+  }
+  return best;
+}
 // ---- end word correction ----
 
 // ============================================================
@@ -855,7 +886,10 @@ async function processLine(frames) {
   if (signTokens.length) raws.push(signTokens.join("  "));
   if (spellRuns.length) {
     const letters = spellRuns.map(r => r.letter).join("-");
-    const { word } = inferWord(spellRuns.map(r => r.top3));
+    const cands = spellRuns.map(r => r.top3);
+    const expectedWord = EXPECTED.length ? matchExpected(cands, EXPECTED, CFG.expectMaxEdit) : null;
+    const word = expectedWord ?? inferWord(cands).word;
+    if (expectedWord) details.push(`expected word: ${expectedWord}`);
     tokens.push(word); // fingerspelled words are lower case, sign glosses upper case
     // show the correction when it changed the letters, e.g. C-A-L-L-B-R-A-T-E → calibrate
     raws.push(word.toUpperCase() === letters.replace(/-/g, "") ? letters : `${letters} → ${word}`);
