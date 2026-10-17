@@ -200,6 +200,7 @@ async function startCamera() {
   stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
   video.srcObject = stream;
   await video.play();
+  if (!video.videoWidth) await new Promise(r => video.addEventListener("loadedmetadata", r, { once: true }));
   canvas.width = video.videoWidth; canvas.height = video.videoHeight;
 }
 
@@ -239,15 +240,26 @@ function hasDominant(handResult) {
   return labels.includes(dominant()) || handResult.landmarks.length === 1;
 }
 
+// Tracking needs live landmarkers and a camera picture. During a camera flip the
+// landmarkers are closed and the stream is swapped; calling them then froze the page.
+let switching = false;
+const cameraReady = () => !switching && handLandmarker && poseLandmarker && video.readyState >= 2 && video.videoWidth > 0;
+
 function loop() {
   if (!running) return;
+  if (cameraReady()) {
+    try { frame(); } catch (e) { console.error("frame error", e); } // one bad frame must not stop the loop
+  }
+  requestAnimationFrame(loop);
+}
+
+function frame() {
   const now = performance.now();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const handResult = handLandmarker.detectForVideo(video, now);
   const poseResult = poseLandmarker.detectForVideo(video, now);
   handResult.landmarks.forEach((lm, i) => drawHand(lm, handResult.handedness[i]?.[0]?.categoryName === "Left" ? "#4fd1c5" : "#f0a35a"));
   if (rec) stepRecording(handResult, poseResult, now);
-  requestAnimationFrame(loop);
 }
 
 // ---------- recording ----------
@@ -408,15 +420,36 @@ $("startBtn").addEventListener("click", async () => {
   }
 });
 
-$("flipBtn").addEventListener("click", async () => {
-  if (rec) return;
-  facingMode = facingMode === "user" ? "environment" : "user";
+function setMirror() {
   const flip = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
   video.style.transform = flip; canvas.style.transform = flip;
-  // MediaPipe keeps tracking state between frames; recreate it for the new stream (iOS crash fix)
-  handLandmarker?.close(); poseLandmarker?.close();
-  await startCamera();
-  await loadModels();
+}
+$("flipBtn").addEventListener("click", async () => {
+  if (rec || switching) return;
+  const btn = $("flipBtn"), previous = facingMode;
+  facingMode = facingMode === "user" ? "environment" : "user";
+  setMirror();
+  btn.disabled = true; btn.textContent = "…";
+  switching = true;
+  setPill(false, "Switching camera…");
+  try {
+    // MediaPipe keeps tracking state between frames; recreate it for the new stream (iOS crash fix)
+    handLandmarker?.close(); poseLandmarker?.close();
+    handLandmarker = poseLandmarker = null;
+    await startCamera();
+    await loadModels();
+  } catch (e) {
+    console.error(e);
+    facingMode = previous; // go back to the camera that worked
+    setMirror();
+    statusEl.textContent = "Couldn't switch camera: " + e.message;
+    try { await startCamera(); } catch (_) { /* leave as-is */ }
+    if (!handLandmarker) { try { await loadModels(); } catch (_) { /* reported above */ } }
+  } finally {
+    switching = false;
+    btn.disabled = false; btn.textContent = "Flip";
+    setPill(false, "Ready");
+  }
 });
 
 async function buildZip() {
