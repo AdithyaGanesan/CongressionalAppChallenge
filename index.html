@@ -656,7 +656,10 @@ function levenshteinWeighted(raw, candidate, letterCandidates, cutoff = Infinity
       } else {
         const candsHere = letterCandidates[i-1] || [];
         const match = candsHere.find(([ch]) => ch.toLowerCase() === candChar);
-        subCost = match ? (1 - match[1]) : 1.5;
+        // swapping in a guess the model barely considered must cost more than dropping
+        // the letter (cost 1); otherwise a stray letter with a 4% "D" turned
+        // calibrate+X into "calibrated"
+        subCost = match ? (1.15 - match[1]) : 1.5;
       }
       dp[i][j] = Math.min(
         dp[i-1][j] + 1,
@@ -693,8 +696,9 @@ function inferWord(letterCandidates) {
 function matchExpected(letterCandidates, expected, maxFrac) {
   const raw = letterCandidates.map(c => c[0][0].toLowerCase()).join("");
   if (raw.length < 2) return null;
-  // a spelling that is already a real word is kept ("sense" never becomes "sensors")
-  if (dictionary?.[raw] && !expected.includes(raw)) return null;
+  // a spelling that is already a real word is kept ("sense" never becomes "sensors"),
+  // unless it is an expected word plus one stray letter at the end (calibrate+D)
+  if (dictionary?.[raw] && !expected.includes(raw) && !expected.includes(raw.slice(0, -1))) return null;
   let best = null, bestCost = Infinity;
   for (const w of expected) {
     const cost = levenshteinWeighted(raw, w, letterCandidates);
