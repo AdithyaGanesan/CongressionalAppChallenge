@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-<title>STAT — ASL to English</title>
+<title>STAT: STEM Translation for Accessibility Tool</title>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <style>
   :root {
@@ -101,12 +101,15 @@
   #diagram .head strong { font-size: 16px; }
   #diagram .head button { background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; padding: 0 4px; }
   #diagramBody svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  #diagramBody .node { cursor: pointer; }
+  #diagramBody .node.hl rect, #diagramBody .node.hl polygon { stroke: var(--accent) !important; stroke-width: 4px !important; fill: #12403b !important; }
   #status {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     text-align: center; padding: 32px; font-size: 15px; color: var(--muted); z-index: 4; background: var(--bg);
   }
   #status.hidden { display: none; }
-  #status h2 { color: var(--text); font-size: 26px; margin: 0 0 8px; letter-spacing: 0.05em; }
+  #status h2 { color: var(--text); font-size: 30px; margin: 0 0 4px; letter-spacing: 0.05em; }
+  #status .fullname { color: var(--accent); font-size: 16px; font-weight: 600; margin-bottom: 14px; }
   #status button {
     margin-top: 18px; background: var(--accent); color: #05221e; border: none;
     font-weight: 600; font-size: 16px; padding: 13px 26px; border-radius: 10px;
@@ -169,6 +172,7 @@
     <div id="status">
       <div>
         <h2>STAT</h2>
+        <div class="fullname">STEM Translation for Accessibility Tool</div>
         <div>Sign or fingerspell to the camera and STAT writes it in English. Hand tracking runs on this phone. No video is uploaded.</div>
         <button id="startBtn">Start</button>
         <div id="err"></div>
@@ -232,6 +236,10 @@ const CFG = {
   signConfMin: numParam("signConfMin", 0.40),
   // signing area: wrist above shoulder-line + signArea × (hip-line − shoulder-line)
   signArea: numParam("signArea", 0.9),
+  // a sign before a fingerspelled word must last this long (shorter = the hand rising into place)
+  signPrefixMs: numParam("signPrefixMs", 450),
+  // a fingerspelled line within this long (hands-down gap) of a line ending in a spelled word continues it
+  joinMs: numParam("joinMs", 3000),
 };
 let dominantHand = (params.get("hand") || "R").toUpperCase().startsWith("L") ? "Left" : "Right";
 let speakOn = params.get("speak") === "1";
@@ -403,16 +411,19 @@ function segmentClip(frames, minSegmentLen = 3, smoothingWindow = 3, minValleyDi
 const TRAIN_ASPECT_FS = 1.0;
 const TRAIN_ASPECT_SIGN = 4 / 3;
 
-let dictionary = null; // general English (english_dictionary.json) merged with STEM (stem_dictionary.json)
+let dictionary = null; // English (english_dictionary.json) + STEM (stem_dictionary.json) + lab words (domain_words.json)
 Promise.all([
   fetch("models/english_dictionary.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
   fetch("models/stem_dictionary.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
-]).then(([eng, stem]) => {
+  fetch("models/domain_words.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
+]).then(([eng, stem, domain]) => {
   const merged = { ...eng };
   // STEM words keep a boost so technical terms aren't drowned out by everyday words
   for (const [w, c] of Object.entries(stem)) merged[w] = Math.max(merged[w] || 0, c * 1000);
+  // lab/engineering terms rank like very common words
+  for (const w of domain.words || []) merged[w] = Math.max(merged[w] || 0, domain.frequency);
   dictionary = Object.keys(merged).length ? merged : null;
-  console.log(`dictionary loaded: ${Object.keys(eng).length} English + ${Object.keys(stem).length} STEM words`);
+  console.log(`dictionary loaded: ${Object.keys(eng).length} English + ${Object.keys(stem).length} STEM + ${(domain.words || []).length} lab words`);
 });
 
 // Rescale x and z so the hand/body geometry has the same proportions as in training.
@@ -775,60 +786,92 @@ const median = arr => percentile(arr, 0.5);
 const LETTER_SMOOTH = 5;           // majority filter window (frames)
 const DOUBLE_LETTER_MOVE = 0.12;   // wrist moves this much (× shoulder width) between two runs of a double letter
 
+// Features over frames[s..end]: how far the dominant wrist spread (× shoulder width),
+// share of frames with one hand up, and the letter model's average confidence.
+function spanFeatures(frames, probs, s, scale) {
+  const fr = frames.slice(s), pr = probs.slice(s);
+  const up = fr.filter(f => f.handsUp > 0);
+  const oneHand = up.length ? up.filter(f => f.handsUp === 1).length / up.length : 0;
+  const w = fr.filter(f => f.domWrist);
+  let travel = Infinity;
+  if (w.length >= 3) {
+    // 10th–90th percentile spread, so raising and lowering the hand barely counts
+    const xs = w.map(f => f.domWrist[0]), ys = w.map(f => f.domWrist[1]);
+    travel = Math.hypot(percentile(xs, 0.9) - percentile(xs, 0.1), percentile(ys, 0.9) - percentile(ys, 0.1)) / scale;
+  }
+  const tops = pr.filter(Boolean).map(p => Math.max(...p));
+  const letterConf = tops.length ? tops.reduce((a, b) => a + b, 0) / tops.length : 0;
+  return { travel: +travel.toFixed(2), oneHand: +oneHand.toFixed(2), letterConf: +letterConf.toFixed(2) };
+}
+const looksSpelled = (ft, nLetters) => ft.travel < CFG.spellMaxTravel && ft.oneHand >= CFG.spellMinOneHand &&
+  ft.letterConf >= CFG.spellMinConf && nLetters >= CFG.spellMinLetters;
+
+// A line is signs, fingerspelling, or signs followed by a fingerspelled word
+// (TODAY C-A-L-I-B-R-A-T-E). Find the earliest letter run from which the rest of
+// the line looks like fingerspelling; everything before it is read as signs.
 async function processLine(frames) {
   // letter model on the dominant hand of every frame
   const probs = [];
   for (const f of frames) probs.push(f.domHand63 ? await letterProbs(f.domHand63) : null);
-
-  const upFrames = frames.filter(f => f.handsUp > 0);
-  const oneHand = upFrames.length ? upFrames.filter(f => f.handsUp === 1).length / upFrames.length : 0;
-  const wristed = frames.filter(f => f.domWrist);
   const scale = median(frames.filter(f => f.scale).map(f => f.scale)) || 1;
-  let travel = Infinity;
-  if (wristed.length >= 3) {
-    // 10th–90th percentile spread, so raising and lowering the hand barely counts
-    const xs = wristed.map(f => f.domWrist[0]), ys = wristed.map(f => f.domWrist[1]);
-    travel = Math.hypot(percentile(xs, 0.9) - percentile(xs, 0.1), percentile(ys, 0.9) - percentile(ys, 0.1)) / scale;
-  }
-  const tops = probs.filter(Boolean).map(p => Math.max(...p));
-  const letterConf = tops.length ? tops.reduce((a, b) => a + b, 0) / tops.length : 0;
-  const spelled = decodeSpelling(frames, probs, scale);
+  const runs = decodeSpelling(frames, probs, scale).runs;
 
-  const features = {
-    frames: frames.length,
-    ms: Math.round(frames[frames.length - 1].t - frames[0].t),
-    travel: +travel.toFixed(2),
-    oneHand: +oneHand.toFixed(2),
-    letterConf: +letterConf.toFixed(2),
-    letters: spelled.runs.length,
-  };
-  const autoSpell = travel < CFG.spellMaxTravel && oneHand >= CFG.spellMinOneHand &&
-    letterConf >= CFG.spellMinConf && spelled.runs.length >= CFG.spellMinLetters;
-  const kind = modeOverride === "auto" ? (autoSpell ? "spell" : "sign") : modeOverride;
-
-  let entry, details;
-  if (kind === "spell") {
-    if (!spelled.runs.length) {
-      entry = { tokens: [], raw: "(no letters held long enough)" };
-    } else {
-      const { word } = inferWord(spelled.runs.map(r => r.top3));
-      entry = { tokens: [word], raw: spelled.runs.map(r => r.letter).join("-") };
+  let split = -1, tail = null;
+  if (modeOverride === "auto") {
+    for (let i = 0; i < runs.length; i++) {
+      const ft = spanFeatures(frames, probs, runs[i].start, scale);
+      if (looksSpelled(ft, runs.length - i)) { split = i; tail = ft; break; }
     }
-    details = spelled.runs.map(r => `${r.letter} ×${r.len}: ` + r.top3.map(([l, p]) => `${l} ${(p * 100).toFixed(0)}%`).join(", "));
-  } else {
-    const segments = segmentClip(frames.map(f => f.rawVec));
-    const tokens = [];
-    details = [];
-    for (const seg of segments) {
+  }
+  let signFrames = [], spellRuns = [];
+  if (modeOverride === "spell") spellRuns = runs;
+  else if (modeOverride === "sign" || split < 0) signFrames = frames;
+  else {
+    const s = runs[split].start;
+    spellRuns = runs.slice(split);
+    // a short lead-in is just the hand rising into place, not a sign
+    if (frames[s].t - frames[0].t >= CFG.signPrefixMs) signFrames = frames.slice(0, s);
+  }
+
+  const details = [];
+  let signTokens = [];
+  if (signFrames.length >= 3) {
+    for (const seg of segmentClip(signFrames.map(f => f.rawVec))) {
       const top = await classifySignSegment(seg);
       details.push(`seg ×${seg.length}: ` + top.slice(0, 3).map(([w, p]) => `${w} ${(p * 100).toFixed(0)}%`).join(", "));
-      tokens.push(top[0][1] >= CFG.signConfMin ? top[0][0] : "?"); // "?" = a sign the model doesn't know well
+      signTokens.push(top[0][1] >= CFG.signConfMin ? top[0][0] : "?"); // "?" = a sign the model doesn't know well
     }
-    entry = { tokens, raw: tokens.join("  ") };
   }
-  entry.kind = kind;
+  // unknown segments right before fingerspelling are the hand moving into place
+  if (spellRuns.length && signTokens.every(t => t === "?")) {
+    if (signTokens.length) details.push(`(dropped ${signTokens.length} unknown lead-in segment(s))`);
+    signTokens = [];
+  }
 
-  const decision = `${kind.toUpperCase()}${modeOverride === "auto" ? " (auto)" : " (forced)"} ` + JSON.stringify(features);
+  const tokens = [...signTokens], raws = [];
+  if (signTokens.length) raws.push(signTokens.join("  "));
+  if (spellRuns.length) {
+    const letters = spellRuns.map(r => r.letter).join("-");
+    const { word } = inferWord(spellRuns.map(r => r.top3));
+    tokens.push(word); // fingerspelled words are lower case, sign glosses upper case
+    // show the correction when it changed the letters, e.g. C-A-L-L-B-R-A-T-E → calibrate
+    raws.push(word.toUpperCase() === letters.replace(/-/g, "") ? letters : `${letters} → ${word}`);
+    details.push(...spellRuns.map(r => `${r.letter} ×${r.len}: ` + r.top3.map(([l, p]) => `${l} ${(p * 100).toFixed(0)}%`).join(", ")));
+  }
+  if (!tokens.length && modeOverride === "spell") raws.push("(no letters held long enough)");
+  const kind = modeOverride === "spell" || (spellRuns.length && !signTokens.length) ? "spell"
+    : spellRuns.length ? "sign+spell" : "sign";
+  const entry = {
+    tokens, raw: raws.join("  "), kind,
+    spelledLast: spellRuns.length > 0,
+    startT: frames[0].t, endT: frames[frames.length - 1].t,
+  };
+
+  const whole = spanFeatures(frames, probs, 0, scale);
+  const decision = `${kind.toUpperCase()} ${modeOverride === "auto" ? "(auto)" : "(forced)"} ` +
+    `${frames.length} frames, ${Math.round(entry.endT - entry.startT)} ms, ${runs.length} letter runs\n` +
+    `whole line: ${JSON.stringify(whole)}\n` +
+    (tail ? `spelling from frame ${runs[split].start}: ${JSON.stringify(tail)}` : "no fingerspelled part found");
   dlog("line:", decision, details);
   lastLineDebug = `${decision}\n${details.join("\n")}`;
   renderDebug();
@@ -877,7 +920,7 @@ function decodeSpelling(frames, probs, scale) {
       let n = 0;
       for (let k = r.start; k < r.end; k++) if (probs[k]) { probs[k].forEach((p, i) => { avg[i] += p; }); n++; }
       const top3 = avg.map((p, i) => [letters[i], p / n]).sort((x, y) => y[1] - x[1]).slice(0, 3);
-      return { letter: letters[r.label], len: r.end - r.start, top3 };
+      return { letter: letters[r.label], start: r.start, end: r.end, len: r.end - r.start, top3 };
     }),
   };
 }
@@ -885,46 +928,65 @@ function decodeSpelling(frames, probs, scale) {
 // ============================================================
 // SIGNS → ENGLISH (rule list in models/phrase_rules.json) and TRANSCRIPT
 // ============================================================
-const CONTEXT_MS = 6000; // a line can complete the line before it within this time
+// Rules are fixed patterns from models/phrase_rules.json, not AI. Punctuation such as
+// the "?" in "Understand?" comes from those rules and word position only. In ASL a
+// question is shown on the face (eyebrows); STAT does not read facial expressions.
 const transcript = [];
 const normTok = s => s.toUpperCase().replace(/[^A-Z]/g, "");
 const asWord = t => t.toLowerCase();
+const isSpelled = t => t !== "?" && t === t.toLowerCase(); // fingerspelled words are lower case
 
 function applyRules(tokens) {
   const toks = tokens.filter(t => t !== "?");
   for (const rule of phraseRules) {
     if (rule.pattern.length !== toks.length) continue;
-    let x = null, ok = true;
-    rule.pattern.forEach((p, i) => {
-      if (p === "{X}") x = toks[i];
-      else if (normTok(p) !== normTok(toks[i])) ok = false;
+    const vars = {};
+    const ok = rule.pattern.every((p, i) => {
+      if (p === "{X}") { vars.X = toks[i]; return true; }                         // any sign or word
+      if (p === "{W}") { vars.W = toks[i]; return isSpelled(toks[i]); }          // a fingerspelled word
+      return normTok(p) === normTok(toks[i]);
     });
-    if (ok) return { english: rule.english.replace("{X}", x ? asWord(x) : ""), rule: rule.signs };
+    if (ok) return { english: rule.english.replace(/\{(X|W)\}/g, (_, k) => asWord(vars[k])), rule: rule.signs };
   }
   return null;
 }
 
 function plainEnglish(tokens) {
   const words = tokens.filter(t => t !== "?").map(asWord);
-  if (!words.length) return "(sign not recognized)";
+  if (!words.length) return "(not recognized)";
   const s = words.join(" ");
   return s[0].toUpperCase() + s.slice(1);
 }
 
 function addLine(entry) {
-  const now = performance.now();
-  entry.time = now;
   const prev = transcript[transcript.length - 1];
-  // e.g. F-O-R-C-E (one line), then MEAN (the next line) → "What does force mean?"
-  if (prev && !prev.merged && !prev.rule && entry.tokens.length && now - prev.time < CONTEXT_MS) {
+  const gap = prev ? entry.startT - prev.endT : Infinity; // hands-down time between the two lines
+  // A fingerspelling-only line that comes soon after an unfinished line (no closing
+  // . ? !) ending in a fingerspelled word continues it:
+  // "Today: calibrate" + S-E-N-S-O-R-S → "Today: calibrate sensors".
+  if (prev && entry.kind === "spell" && entry.tokens.length && prev.spelledLast &&
+      gap < CFG.joinMs && !/[.?!]$/.test(prev.english)) {
+    Object.assign(prev, {
+      tokens: [...prev.tokens, ...entry.tokens],
+      raw: `${prev.raw}  ${entry.raw}`,
+      english: `${prev.english} ${entry.tokens.join(" ")}`,
+      endT: entry.endT,
+    });
+    finishLine(prev, entry.tokens);
+    return;
+  }
+  // A line can also complete a rule together with the line before it,
+  // e.g. F-O-R-C-E, then MEAN WHAT → "What does force mean?"
+  if (prev && !prev.merged && !prev.rule && entry.tokens.length && gap < CFG.joinMs) {
     const both = applyRules([...prev.tokens, ...entry.tokens]);
     if (both && !applyRules(entry.tokens)) {
       Object.assign(prev, {
         tokens: [...prev.tokens, ...entry.tokens],
         raw: `${prev.raw}  ${entry.raw}`,
-        english: both.english, rule: both.rule, merged: true, time: now,
+        english: both.english, rule: both.rule, merged: true,
+        endT: entry.endT, spelledLast: entry.spelledLast,
       });
-      finishLine(prev);
+      finishLine(prev, entry.tokens);
       return;
     }
   }
@@ -932,13 +994,13 @@ function addLine(entry) {
   entry.english = r ? r.english : plainEnglish(entry.tokens);
   entry.rule = r?.rule || null;
   transcript.push(entry);
-  finishLine(entry);
+  finishLine(entry, entry.tokens);
 }
 
-function finishLine(entry) {
+function finishLine(entry, newTokens) {
   dlog("english:", entry.english, "| rule:", entry.rule || "none", "| raw:", entry.raw);
   renderTranscript();
-  maybeShowDiagram(entry.tokens);
+  maybeShowDiagram(newTokens);
   if (speakOn && entry.tokens.some(t => t !== "?")) speak(entry.english);
 }
 
@@ -959,7 +1021,7 @@ function renderTranscript() {
     en.textContent = e.english;
     const raw = document.createElement("div");
     raw.className = "raw";
-    raw.textContent = e.raw;
+    raw.textContent = e.raw.replace(/-/g, "\u2011"); // non-breaking hyphens: a spelled word wraps as a whole
     div.append(en, raw);
     transcriptEl.appendChild(div);
   });
@@ -986,17 +1048,28 @@ function loadMermaid() {
   return mermaidP;
 }
 
+let shownTopic = null;
 async function maybeShowDiagram(tokens) {
   const words = tokens.filter(t => t !== "?").map(asWord);
   const topic = topics.find(tp => tp.keywords.some(k => words.includes(k)));
-  if (!topic) return;
+  if (!topic || (topic.id === shownTopic && diagramEl.classList.contains("shown"))) return;
   try {
     const mermaid = await loadMermaid();
     // topic text is fixed content from topic_diagrams.json; recognized text never goes into Mermaid source
-    const { svg } = await mermaid.render(`dg${++diagramCount}`, topic.mermaid);
+    const src = Array.isArray(topic.mermaid) ? topic.mermaid.join("\n") : topic.mermaid;
+    const { svg } = await mermaid.render(`dg${++diagramCount}`, src);
     document.getElementById("diagramTitle").textContent = topic.title;
-    document.getElementById("diagramBody").innerHTML = svg;
+    const body = document.getElementById("diagramBody");
+    body.innerHTML = svg;
+    // tap a step to highlight it
+    body.querySelectorAll(".node").forEach(n => n.addEventListener("click", () => {
+      const on = !n.classList.contains("hl");
+      body.querySelectorAll(".node.hl").forEach(x => x.classList.remove("hl"));
+      if (on) n.classList.add("hl");
+    }));
+    shownTopic = topic.id;
     diagramEl.classList.add("shown");
+    diagramEl.scrollTop = 0;
   } catch (e) {
     console.error("diagram", e);
   }
@@ -1187,6 +1260,7 @@ speakBtn.addEventListener("click", () => {
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   transcript.length = 0;
+  shownTopic = null;
   renderTranscript();
   diagramEl.classList.remove("shown");
 });
@@ -1206,7 +1280,7 @@ window.addEventListener("resize", () => {
 });
 
 // test hooks for the headless smoke test (debug mode only)
-if (DEBUG) window.__stat = { addLine, applyRules, inferWord, decodeSpelling, transcript };
+if (DEBUG) window.__stat = { addLine, applyRules, inferWord, decodeSpelling, processLine, transcript, CFG };
 </script>
 </body>
 </html>

@@ -1,47 +1,62 @@
 {
-  "_about": "Topic diagrams shown when a recognized sign or corrected fingerspelled word matches a keyword. Mermaid flowchart source; keep each one small and check the science.",
+  "_about": "Topic diagrams shown when a recognized sign or corrected fingerspelled word matches a keyword. Each 'mermaid' entry is a list of lines of Mermaid flowchart source, one node or arrow per line, so the text is easy to edit. Text goes inside the quotes; <br/> starts a new line inside a box. Keep the content accurate.",
   "topics": [
     {
-      "id": "force",
-      "title": "Force",
+      "id": "calibration",
+      "title": "Sensor calibration",
       "keywords": [
-        "force",
-        "forces",
-        "push",
-        "pull",
-        "newton",
-        "newtons"
+        "calibrate",
+        "calibration",
+        "calibrating",
+        "calibrated"
       ],
-      "mermaid": "flowchart TD\n  F[\"Force = a push or a pull\"] --> P[\"Push: moves away\"]\n  F --> Q[\"Pull: comes closer\"]\n  P --> L[\"F = m × a<br/>force = mass × acceleration\"]\n  Q --> L\n  L --> N[\"Measured in newtons (N)<br/>1 N = 1 kg·m/s²\"]"
+      "mermaid": [
+        "flowchart TD",
+        "  S1[\"1. Warm up<br/>Power on and wait until readings are steady (about 10 minutes)\"]",
+        "  S2[\"2. Zero<br/>Read with nothing applied; record the offset\"]",
+        "  S3[\"3. Apply known values<br/>Reference weights at 0, 25, 50, 75 and 100% of the range\"]",
+        "  S4[\"4. Record<br/>The sensor's reading next to each known value\"]",
+        "  S5[\"5. Fit<br/>true value = gain × reading + offset\"]",
+        "  Q{\"Check value within tolerance?\"}",
+        "  OK[\"Label the sensor with the date and log the result\"]",
+        "  FIX[\"Find the cause<br/>(loose mount, wrong weight, drift)\"]",
+        "  S1 --> S2 --> S3 --> S4 --> S5 --> Q",
+        "  Q -->|Yes| OK",
+        "  Q -->|No| FIX",
+        "  FIX --> S2"
+      ]
     },
     {
-      "id": "gravity",
-      "title": "Gravity",
+      "id": "torque",
+      "title": "Torque: tightening bolts",
       "keywords": [
-        "gravity",
-        "gravitational",
-        "weight"
+        "torque",
+        "torques"
       ],
-      "mermaid": "flowchart TD\n  E[\"Earth\"] -->|pulls toward its center| O[\"Any object, e.g. an apple\"]\n  O --> W[\"Weight = mass × g\"]\n  W --> G[\"g ≈ 9.8 m/s² on Earth\"]\n  G --> X[\"Example: 10 kg × 9.8 m/s² = 98 N\"]"
+      "mermaid": [
+        "flowchart TD",
+        "  T[\"Torque τ = r × F<br/>lever arm × force, in N·m\"]",
+        "  A[\"Set the torque wrench to spec<br/>(for example 25 N·m)\"]",
+        "  B[\"Tighten in a star pattern\"]",
+        "  C[\"Mark each bolt\"]",
+        "  D[\"Log the values\"]",
+        "  T --> A --> B --> C --> D"
+      ]
     },
     {
-      "id": "energy",
-      "title": "Energy",
+      "id": "velocity",
+      "title": "Velocity",
       "keywords": [
-        "energy",
-        "kinetic",
-        "potential"
+        "velocity",
+        "velocities"
       ],
-      "mermaid": "flowchart TD\n  A[\"Ball at the top of a ramp<br/>stored (potential) energy\"] -->|rolls down| B[\"Ball moving fast<br/>moving (kinetic) energy\"]\n  B -->|friction| C[\"Heat in the ramp and air\"]\n  C --> D[\"Energy is not lost,<br/>it changes form\"]"
-    },
-    {
-      "id": "cell",
-      "title": "Animal cell",
-      "keywords": [
-        "cell",
-        "cells"
-      ],
-      "mermaid": "flowchart TD\n  M[\"Cell membrane<br/>controls what goes in and out\"] --> C[\"Cytoplasm<br/>jelly that fills the cell\"]\n  C --> N[\"Nucleus<br/>the control center\"]\n  N --> D[\"DNA<br/>instructions for the cell\"]\n  C --> MI[\"Mitochondria<br/>release energy from food\"]"
+      "mermaid": [
+        "flowchart TD",
+        "  D[\"Displacement<br/>how far, in a direction (m)\"] --> V[\"Velocity = displacement ÷ time\"]",
+        "  T[\"Time (s)\"] --> V",
+        "  V --> U[\"Unit: meters per second (m/s)\"]",
+        "  V --> R[\"Has a direction<br/>e.g. 3 m/s → east\"]"
+      ]
     }
   ]
 }

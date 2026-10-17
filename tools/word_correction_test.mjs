@@ -12,6 +12,7 @@
 // versions of the correction code, not as real-world accuracy.
 //
 // Run from the repo root:  node tools/word_correction_test.mjs [--words 200] [--seed 1] [--show 10]
+// Specific words, each tried --reps times:  node tools/word_correction_test.mjs --list calibrate,sensors --reps 50
 
 import fs from "node:fs";
 
@@ -29,8 +30,9 @@ const end = html.indexOf("// ---- end word correction");
 if (start < 0 || end < 0) throw new Error("couldn't find inferWord code in index.html");
 const eng = JSON.parse(fs.readFileSync("models/english_dictionary.json", "utf8"));
 const stem = JSON.parse(fs.readFileSync("models/stem_dictionary.json", "utf8"));
+const domain = args.nodomain ? {} : JSON.parse(fs.readFileSync("models/domain_words.json", "utf8"));
 const mergeSrc = html.match(/const merged = \{ \.\.\.eng \};[\s\S]*?dictionary = [^\n]*\n/)[0];
-const dictionary = new Function("eng", "stem", `let dictionary; ${mergeSrc}; return dictionary;`)(eng, stem);
+const dictionary = new Function("eng", "stem", "domain", `let dictionary; ${mergeSrc}; return dictionary;`)(eng, stem, domain);
 const inferWord = new Function("dictionary", `${html.slice(start, end)}; return inferWord;`)(dictionary);
 
 // ---- seeded RNG so runs are repeatable ----
@@ -94,12 +96,12 @@ const LEVELS = [
 // ---- test words: common STEM Wiki words and common English words ----
 const isWord = w => /^[a-z]{3,12}$/.test(w);
 const topWords = (d, n) => Object.entries(d).filter(([w]) => isWord(w)).sort((a, b) => b[1] - a[1]).slice(0, n).map(([w]) => w);
-const LISTS = {
-  STEM: sample(topWords(stem, 3000), N_WORDS),
-  English: sample(topWords(eng, 10000), N_WORDS),
-};
+const REPS = Number(args.reps ?? 50);
+const LISTS = args.list
+  ? Object.fromEntries(String(args.list).split(",").map(w => [w, new Array(REPS).fill(w.toLowerCase())]))
+  : { STEM: sample(topWords(stem, 3000), N_WORDS), English: sample(topWords(eng, 10000), N_WORDS) };
 
-console.log(`dictionary: ${Object.keys(dictionary).length} words | ${N_WORDS} words per list | seed ${SEED}\n`);
+console.log(`dictionary: ${Object.keys(dictionary).length} words | ${args.list ? REPS + ' tries per word' : N_WORDS + ' words per list'} | seed ${SEED}\n`);
 const t0 = Date.now();
 let calls = 0;
 for (const lvl of LEVELS) {
@@ -117,7 +119,7 @@ for (const lvl of LEVELS) {
       if (word === w) fixedOk++; else fails.push(`${w} -> "${raw}" -> ${word}`);
     }
     const pct = n => `${((100 * n) / words.length).toFixed(1)}%`.padStart(6);
-    console.log(`  ${listName.padEnd(8)} raw letters ${pct(rawOk)}   after correction ${pct(fixedOk)}`);
+    console.log(`  ${listName.padEnd(10)} raw letters ${pct(rawOk)}   after correction ${pct(fixedOk)}`);
   }
   if (SHOW) console.log("  e.g. " + fails.slice(0, SHOW).join(" | "));
   console.log();
