@@ -78,11 +78,6 @@
   #indicator .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
   #indicator.listening .dot { background: var(--listen); animation: pulse 1s infinite; }
   #indicator.thinking .dot { background: var(--think); animation: pulse 0.5s infinite; }
-  #expectNote {
-    position: absolute; top: 14px; right: 10px; z-index: 2; max-width: 55%;
-    background: rgba(13, 17, 23, 0.75); border: 1px solid var(--line); border-radius: 8px;
-    padding: 4px 8px; font-size: 12px; color: var(--muted); text-align: right;
-  }
   @keyframes pulse { 50% { opacity: 0.3; } }
   #hud {
     position: absolute; top: 48px; left: 10px; right: 10px;
@@ -165,7 +160,6 @@
     <video id="video" playsinline muted autoplay></video>
     <canvas id="overlay"></canvas>
     <div id="indicator"><span class="dot"></span><span id="indicatorText">Ready</span></div>
-    <div id="expectNote" hidden></div>
     <div id="hud" class="debug-only">
       <div class="pill"><b>FPS</b> <span id="fps">–</span></div>
       <div class="pill"><b>Hands up</b> <span id="handCount">0</span></div>
@@ -263,11 +257,6 @@ if (DEBUG) {
   document.head.appendChild(s);
 }
 const dlog = (...a) => { if (DEBUG) console.log(...a); };
-if (EXPECTED.length) {
-  const note = document.getElementById("expectNote");
-  note.textContent = `Expecting: ${EXPECTED.join(", ")}`;
-  note.hidden = false;
-}
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("overlay");
@@ -700,8 +689,7 @@ function inferWord(letterCandidates) {
 // Expected words: a teacher can tell STAT the lesson's words in advance
 // (?expect=calibrate,sensors), like hint phrases in speech recognition. A spelling
 // whose weighted edit distance to an expected word is at most maxFrac × the word's
-// length becomes that word. The raw letters are still shown, and the screen says
-// which words are expected.
+// length becomes that word. The raw letters are still shown under the English.
 function matchExpected(letterCandidates, expected, maxFrac) {
   const raw = letterCandidates.map(c => c[0][0].toLowerCase()).join("");
   if (raw.length < 2) return null;
@@ -1138,6 +1126,7 @@ function renderDebug() {
   if (!DEBUG) return;
   debugPanelEl.textContent =
     `settings: ${JSON.stringify(CFG)} hand=${dominantHand} speak=${speakOn} mode=${modeOverride}\n` +
+    `expected words: ${EXPECTED.length ? EXPECTED.join(", ") : "(none)"}\n` +
     `spell if travel<${CFG.spellMaxTravel} & oneHand≥${CFG.spellMinOneHand} & letterConf≥${CFG.spellMinConf} & letters≥${CFG.spellMinLetters}\n` +
     `last line: ${lastLineDebug}`;
 }

@@ -48,8 +48,8 @@ Sensor calibration (main), TORQUE and VELOCITY (backups), in `models/topic_diagr
 
 Open STAT with `?expect=calibrate,sensors`. A spelling close to an expected word (weighted edit distance at most
 half the word's length) becomes that word; a spelling that is already a real word is kept. The raw letters stay
-on screen and an "Expecting: calibrate, sensors" note is shown, so the video stays honest about what was read.
-Say in the video or description that the lesson's words were given to STAT in advance.
+on screen (e.g. C-O-L-I-B-R-A-T-E → calibrate). Nothing on screen says which words are expected, so say in the
+video or its description that the lesson's words were given to STAT in advance.
 
 Simulated misreads, 100 tries each (`--expect calibrate,sensors`):
 
