@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>STAT: Training Data Capture</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #2b3340; --text: #e6edf3; --muted: #8b98a5;
+    --accent: #4fd1c5; --rec: #ef6a6a; --warn: #f0c35a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overscroll-behavior: none; }
+  #app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+  header { padding: calc(env(safe-area-inset-top, 0px) + 8px) 12px 8px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  header a { color: var(--accent); text-decoration: none; font-size: 15px; font-weight: 600; padding: 8px 4px; }
+  header h1 { margin: 0; font-size: 16px; }
+  button { font: inherit; color: var(--text); background: #1c232c; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 44px; }
+  button:disabled { opacity: 0.4; }
+  button.primary { background: var(--accent); color: #05221e; border-color: var(--accent); font-weight: 700; }
+  button.stop { background: var(--rec); color: #2a0707; border-color: var(--rec); font-weight: 700; }
+  header button { min-height: 36px; padding: 6px 10px; font-size: 14px; }
+
+  #stage { position: relative; flex: 1; min-height: 140px; background: #000; overflow: hidden; }
+  video, canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  #prompt { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; text-shadow: 0 2px 14px #000, 0 0 4px #000; }
+  #prompt .big { font-size: 72px; font-weight: 800; line-height: 1; }
+  #prompt .small { font-size: 18px; font-weight: 600; margin-top: 6px; }
+  #pill { position: absolute; top: 8px; left: 8px; background: rgba(13,17,23,.8); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 14px; font-weight: 600; }
+  #pill.rec { background: var(--rec); color: #2a0707; border-color: var(--rec); }
+
+  #panel { background: var(--panel); border-top: 1px solid var(--line); padding: 8px 12px calc(env(safe-area-inset-bottom, 0px) + 10px); display: flex; flex-direction: column; gap: 8px; }
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .tabs button { min-height: 38px; padding: 6px; font-size: 14px; }
+  .tabs button.active { background: var(--accent); color: #05221e; border-color: var(--accent); font-weight: 700; }
+  #items { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; max-height: 26vh; overflow-y: auto; }
+  #items.signs { grid-template-columns: repeat(2, 1fr); }
+  #items button { padding: 4px 0; min-height: 46px; font-weight: 700; font-size: 17px; line-height: 1.1; }
+  #items.signs button { font-size: 15px; }
+  #items button small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+  #items button.sel { outline: 3px solid var(--accent); outline-offset: -1px; }
+  #items button.done small { color: var(--accent); }
+  #phraseLabel { display: none; width: 100%; }
+  input[type=text], select { font: inherit; font-size: 16px; color: var(--text); background: #0a0d12; border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-height: 44px; }
+  #recordBtn { font-size: 20px; min-height: 56px; width: 100%; }
+  #status { font-size: 14px; min-height: 19px; color: var(--muted); }
+  #status .warn, .warn { color: var(--warn); }
+  .bar { display: flex; gap: 6px; align-items: center; }
+  .bar span { flex: 1; font-size: 13px; color: var(--muted); }
+  .bar button { min-height: 38px; padding: 6px 10px; font-size: 14px; }
+
+  #setup { position: fixed; inset: 0; z-index: 10; background: var(--bg); overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 16px) 18px calc(env(safe-area-inset-bottom, 0px) + 24px); display: flex; flex-direction: column; gap: 14px; }
+  #setup.hidden { display: none; }
+  #setup h2 { margin: 0; font-size: 24px; }
+  #setup a { color: var(--accent); }
+  #setup p { margin: 0; font-size: 16px; line-height: 1.45; color: var(--muted); }
+  #consentBox { border: 1px solid var(--warn); border-radius: 12px; padding: 12px; font-size: 16px; line-height: 1.45; }
+  #consentBox label { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; font-weight: 600; }
+  #consentBox input { width: 26px; height: 26px; flex: none; margin: 0; }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--muted); }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .fields input, .fields select { width: 100%; min-width: 0; }
+  @media (max-height: 700px) {
+    #items button { min-height: 38px; font-size: 15px; }
+    #items button small { font-size: 10px; }
+    #recordBtn { min-height: 48px; }
+  }
+  #setupErr { color: var(--rec); font-size: 15px; }
+</style>
+</head>
+<body>
+<div id="setup">
+  <a href="./">← Back to STAT</a>
+  <h2>Record training data</h2>
+  <p>Records a signer's letters and signs so STAT's models can learn from real signers. Recording takes about 20–30 minutes.</p>
+  <div id="consentBox">
+    This page saves only hand and body <strong>landmark positions</strong> (dots), not video or photos.
+    They will be used to train and test STAT's sign models, kept in the project's private storage, and never posted publicly.
+    If they are used to train STAT, the project will say so.
+    <label><input type="checkbox" id="consent" /> The signer has read this and agrees to be recorded.</label>
+  </div>
+  <div class="fields">
+    <label class="field">Signer ID <input type="text" id="signer" value="S1" maxlength="8" autocapitalize="characters" autocomplete="off" /></label>
+    <label class="field">Signing hand <select id="hand"><option>Right</option><option>Left</option></select></label>
+  </div>
+  <button id="startBtn" class="primary" disabled>Turn on camera</button>
+  <div id="setupErr"></div>
+  <div class="bar" id="setupSaved" style="display:none"><span id="setupSavedText"></span><button id="setupZipBtn">Save zip</button></div>
+</div>
+
+<div id="app">
+  <header>
+    <a href="./">← STAT</a>
+    <h1>Capture <span id="signerTag" style="color:var(--muted);font-weight:500"></span></h1>
+    <button id="flipBtn" disabled>Flip</button>
+  </header>
+
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div id="pill">Camera off</div>
+    <div id="prompt"><div class="big" id="promptBig"></div><div class="small" id="promptSmall"></div></div>
+  </div>
+
+  <div id="panel">
+    <div class="tabs">
+      <button data-type="letter" class="active">Letters</button>
+      <button data-type="sign">Signs</button>
+      <button data-type="phrase">Phrase (test)</button>
+    </div>
+    <div id="items"></div>
+    <input type="text" id="phraseLabel" placeholder="Label, e.g. TODAY C-A-L-I-B-R-A-T-E" autocomplete="off" />
+    <button id="recordBtn" class="primary" disabled>Record</button>
+    <div id="status"></div>
+    <div class="bar">
+      <span id="stats"></span>
+      <button id="undoBtn" disabled>Undo</button>
+      <button id="zipBtn" disabled>Save zip</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { HandLandmarker, PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+// ---------- what gets recorded ----------
+// Raw MediaPipe output (no normalization), so any preprocessing can be applied later:
+// per frame, each hand's 21 × (x, y, z) with handedness + score, and 8 pose points.
+const POSE_SUBSET = [11, 12, 13, 14, 15, 16, 23, 24]; // shoulders, elbows, wrists, hips
+const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+// script signs, plus the two the model is missing (HELLO, THANK-YOU) for a later retrain
+const SIGNS = ["TODAY", "UNDERSTAND", "GOOD", "GREAT", "HELLO", "THANK-YOU"];
+const LETTER_COUNTDOWN_MS = 3000;
+const LETTER_RECORD_MS = 5000;
+// sign takes start/stop like the app: hands up into the signing area → hands down
+const LINE_END_MS = 700;
+const SIGN_AREA = 0.9;        // wrist above shoulder-line + 0.9 × (hip-line − shoulder-line)
+const MIN_TAKE_MS = 250;
+const MAX_TAKE_MS = 15000;
+const round = v => Math.round(v * 1e5) / 1e5;
+
+const $ = id => document.getElementById(id);
+const video = $("video"), canvas = $("overlay"), ctx = canvas.getContext("2d");
+const pill = $("pill"), statusEl = $("status"), statsEl = $("stats");
+const recordBtn = $("recordBtn");
+
+let handLandmarker, poseLandmarker, stream = null, facingMode = "user", running = false;
+let type = "letter", selected = "A";
+let takes = [];      // all takes this session (also mirrored to IndexedDB)
+let rec = null;      // current recording state
+const log = msg => console.log(`[capture] ${msg}`);
+function prompt(big, small = "") { $("promptBig").textContent = big; $("promptSmall").textContent = small; }
+
+// ---------- backup storage (IndexedDB; downloads are the real copy) ----------
+let db = null;
+async function openDb() {
+  try {
+    db = await new Promise((res, rej) => {
+      const r = indexedDB.open("stat-capture", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("takes", { keyPath: "id" });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const all = await new Promise((res, rej) => {
+      const r = db.transaction("takes").objectStore("takes").getAll();
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    takes = all.sort((a, b) => a.id - b.id);
+    if (takes.length) log(`restored ${takes.length} takes from this phone's backup`);
+  } catch (e) {
+    db = null;
+    log("backup storage unavailable (private mode?) — download the zip before closing the page");
+  }
+}
+function dbPut(take) {
+  try { db?.transaction("takes", "readwrite").objectStore("takes").put(take); } catch (e) { log("backup write failed: " + e.message); }
+}
+function dbDelete(id) {
+  try { db?.transaction("takes", "readwrite").objectStore("takes").delete(id); } catch (e) { /* backup only */ }
+}
+
+// ---------- camera + MediaPipe (same setup as index.html) ----------
+async function loadModels() {
+  const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  handLandmarker = await HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate: "GPU" },
+    runningMode: "VIDEO", numHands: 2,
+  });
+  poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate: "GPU" },
+    runningMode: "VIDEO", numPoses: 1,
+  });
+}
+async function startCamera() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  // iOS Safari: fully release the old stream before asking for a new one
+  video.pause(); video.srcObject = null;
+  await new Promise(r => setTimeout(r, 150));
+  stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+}
+
+const HAND_CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+function drawHand(lm, color) {
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+  for (const [a, b] of HAND_CONNECTIONS) {
+    ctx.beginPath(); ctx.moveTo(lm[a].x * canvas.width, lm[a].y * canvas.height); ctx.lineTo(lm[b].x * canvas.width, lm[b].y * canvas.height); ctx.stroke();
+  }
+}
+
+// ---------- per frame ----------
+function frameRecord(handResult, poseResult, t) {
+  const pose = poseResult.landmarks[0];
+  return {
+    t: Math.round(t),
+    hands: handResult.landmarks.map((lm, i) => ({
+      handedness: handResult.handedness[i]?.[0]?.categoryName ?? null,
+      score: round(handResult.handedness[i]?.[0]?.score ?? 0),
+      landmarks: lm.map(p => [round(p.x), round(p.y), round(p.z)]),
+    })),
+    pose: pose ? POSE_SUBSET.map(i => [round(pose[i].x), round(pose[i].y), round(pose[i].z), round(pose[i].visibility ?? 0)]) : null,
+  };
+}
+function handsUp(handResult, poseResult) {
+  const pose = poseResult.landmarks[0];
+  let areaY = Infinity;
+  if (pose) {
+    const shY = (pose[11].y + pose[12].y) / 2, hipY = (pose[23].y + pose[24].y) / 2;
+    areaY = shY + SIGN_AREA * (hipY - shY);
+  }
+  return handResult.landmarks.filter(lm => lm[0].y < areaY).length;
+}
+const dominant = () => $("hand").value;
+function hasDominant(handResult) {
+  const labels = handResult.handedness.map(h => h?.[0]?.categoryName);
+  return labels.includes(dominant()) || handResult.landmarks.length === 1;
+}
+
+function loop() {
+  if (!running) return;
+  const now = performance.now();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const handResult = handLandmarker.detectForVideo(video, now);
+  const poseResult = poseLandmarker.detectForVideo(video, now);
+  handResult.landmarks.forEach((lm, i) => drawHand(lm, handResult.handedness[i]?.[0]?.categoryName === "Left" ? "#4fd1c5" : "#f0a35a"));
+  if (rec) stepRecording(handResult, poseResult, now);
+  requestAnimationFrame(loop);
+}
+
+// ---------- recording ----------
+function startRecording() {
+  const label = type === "phrase" ? $("phraseLabel").value.trim() : selected;
+  if (!label) { statusEl.textContent = "Type a label for the phrase first."; return; }
+  rec = { type, label, frames: [], phase: type === "letter" ? "countdown" : "armed", phaseAt: performance.now(), lastUpAt: 0, lastUpIndex: 0 };
+  recordBtn.textContent = "Stop";
+  recordBtn.className = "stop";
+  statusEl.textContent = type === "letter" ? `Get ready to hold "${label}"…` : `Raise your hands and sign "${label}". Lower them when done.`;
+}
+
+function stepRecording(handResult, poseResult, now) {
+  const elapsed = now - rec.phaseAt;
+  if (rec.type === "letter") {
+    if (rec.phase === "countdown") {
+      prompt(rec.label, `hold it in ${Math.ceil((LETTER_COUNTDOWN_MS - elapsed) / 1000)}…`);
+      if (elapsed >= LETTER_COUNTDOWN_MS) { rec.phase = "recording"; rec.phaseAt = now; }
+      return;
+    }
+    // keep only frames where the signing hand is visible
+    if (hasDominant(handResult)) rec.frames.push(frameRecord(handResult, poseResult, now - rec.phaseAt));
+    setPill(true, `● REC  ${rec.frames.length} frames`);
+    prompt(rec.label, `hold… ${Math.max(0, Math.ceil((LETTER_RECORD_MS - elapsed) / 1000))}`);
+    if (elapsed >= LETTER_RECORD_MS) finishRecording();
+    return;
+  }
+  // signs / phrases: hands up starts the take, hands down for LINE_END_MS ends it
+  const up = handsUp(handResult, poseResult) > 0;
+  if (rec.phase === "armed") {
+    setPill(false, "Waiting for hands…");
+    prompt(rec.type === "sign" ? rec.label : "", "raise hands to start");
+    if (!up) return;
+    rec.phase = "recording"; rec.phaseAt = now;
+  }
+  rec.frames.push(frameRecord(handResult, poseResult, now - rec.phaseAt));
+  if (up) { rec.lastUpAt = now; rec.lastUpIndex = rec.frames.length; }
+  setPill(true, `● REC  ${rec.frames.length} frames`);
+  prompt(rec.type === "sign" ? rec.label : "", "lower hands when done");
+  if (now - rec.lastUpAt >= LINE_END_MS || now - rec.phaseAt > MAX_TAKE_MS) {
+    rec.frames = rec.frames.slice(0, rec.lastUpIndex); // drop the hands-down tail
+    finishRecording();
+  }
+}
+
+function setPill(on, text) { pill.className = on ? "rec" : ""; pill.textContent = text; }
+
+function finishRecording(cancelled = false) {
+  const r = rec;
+  rec = null;
+  prompt("");
+  setPill(false, "Ready");
+  recordBtn.textContent = "Record";
+  recordBtn.className = "primary";
+  if (cancelled || !r) { statusEl.textContent = "Stopped, nothing saved."; return; }
+  const ms = r.frames.length ? r.frames[r.frames.length - 1].t - r.frames[0].t : 0;
+  if (r.frames.length < 5 || (r.type !== "letter" && ms < MIN_TAKE_MS)) {
+    statusEl.innerHTML = `<span class="warn">Not saved: only ${r.frames.length} frames with the hand in view.</span>`;
+    return;
+  }
+  const signer = ($("signer").value.trim() || "S1").replace(/[^A-Za-z0-9]/g, "");
+  const n = takes.filter(t => t.signer === signer && t.type === r.type && t.label === r.label).length + 1;
+  const take = {
+    id: Math.max(Date.now(), (takes[takes.length - 1]?.id ?? 0) + 1), // unique even for takes in the same millisecond
+    format: "stat-capture-v1",
+    signer, dominantHand: dominant(), type: r.type, label: r.label, take: n,
+    createdAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    videoWidth: video.videoWidth, videoHeight: video.videoHeight, facingMode,
+    poseIndices: POSE_SUBSET,
+    frames: r.frames,
+  };
+  takes.push(take);
+  dbPut(take);
+  statusEl.textContent = `Saved ${r.label} #${n} (${r.frames.length} frames, ${(ms / 1000).toFixed(1)} s).`;
+  log(`saved ${fileName(take)}`);
+  if (r.type === "letter") { // move on to the next letter
+    const i = LETTERS.indexOf(r.label);
+    if (i >= 0 && i < LETTERS.length - 1) selected = LETTERS[i + 1];
+  }
+  render();
+}
+
+const safe = s => s.replace(/[^A-Za-z0-9-]+/g, "_").replace(/^_|_$/g, "");
+const fileName = t => `${t.signer}_${t.type}_${safe(t.label)}_${String(t.take).padStart(3, "0")}.json`;
+
+// ---------- UI ----------
+function render() {
+  const items = type === "letter" ? LETTERS : type === "sign" ? SIGNS : [];
+  const signer = ($("signer").value.trim() || "S1").replace(/[^A-Za-z0-9]/g, "");
+  $("items").className = type === "sign" ? "signs" : "";
+  $("items").style.display = type === "phrase" ? "none" : "";
+  $("signerTag").textContent = signer;
+  $("items").replaceChildren(...items.map(it => {
+    const n = takes.filter(t => t.signer === signer && t.type === type && t.label === it).length;
+    const b = document.createElement("button");
+    b.className = (it === selected ? "sel " : "") + (n >= (type === "letter" ? 3 : 10) ? "done" : "");
+    b.textContent = it;
+    const small = document.createElement("small");
+    small.textContent = `${n} take${n === 1 ? "" : "s"}`;
+    b.appendChild(small);
+    b.addEventListener("click", () => { if (!rec) { selected = it; render(); } });
+    return b;
+  }));
+  $("items").querySelector(".sel")?.scrollIntoView({ block: "nearest" });
+  $("phraseLabel").style.display = type === "phrase" ? "block" : "none";
+  const by = k => takes.filter(t => t.type === k).length;
+  const n = (k, word) => `${by(k)} ${word}${by(k) === 1 ? "" : "s"}`;
+  statsEl.textContent = `Saved: ${n("letter", "letter")} · ${n("sign", "sign")} · ${n("phrase", "phrase")}`;
+  recordBtn.disabled = !running;
+  for (const id of ["zipBtn", "undoBtn"]) $(id).disabled = !takes.length || !!rec;
+  $("startBtn").disabled = !$("consent").checked;
+  $("setupSaved").style.display = takes.length ? "flex" : "none";
+  $("setupSavedText").textContent = `${takes.length} takes from earlier are saved on this phone.`;
+}
+
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  if (rec) return;
+  type = b.dataset.type;
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("active", x === b));
+  selected = type === "letter" ? "A" : type === "sign" ? SIGNS[0] : null;
+  statusEl.textContent = { letter: "Pick a letter, then Record. Hold the letter for 5 seconds.",
+    sign: "Pick a sign, then Record. Sign once with hands up, then lower them.",
+    phrase: "Type what will be signed, then Record. These are kept for testing, not training." }[type];
+  render();
+}));
+$("consent").addEventListener("change", render);
+$("hand").addEventListener("change", render);
+
+// keep the screen on while recording (where the browser supports it)
+let wakeLock = null;
+async function keepAwake() {
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch (e) { /* not supported: fine */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && running) keepAwake(); });
+$("signer").addEventListener("input", render);
+
+recordBtn.addEventListener("click", () => { if (rec) finishRecording(true); else startRecording(); });
+
+$("startBtn").addEventListener("click", async () => {
+  const btn = $("startBtn");
+  btn.disabled = true; btn.textContent = "Loading…";
+  try {
+    await loadModels();
+    await startCamera();
+    running = true;
+    $("setup").classList.add("hidden");
+    $("flipBtn").disabled = false;
+    setPill(false, "Ready");
+    statusEl.textContent = "Pick a letter, then Record. Hold the letter for 5 seconds.";
+    keepAwake();
+    render();
+    requestAnimationFrame(loop);
+  } catch (e) {
+    console.error(e);
+    btn.disabled = false; btn.textContent = "Try again";
+    $("setupErr").textContent = e.name === "NotAllowedError" ? "Camera permission was denied. Allow camera access and try again." : "Couldn't start: " + e.message;
+  }
+});
+
+$("flipBtn").addEventListener("click", async () => {
+  if (rec) return;
+  facingMode = facingMode === "user" ? "environment" : "user";
+  const flip = facingMode === "user" ? "scaleX(-1)" : "scaleX(1)";
+  video.style.transform = flip; canvas.style.transform = flip;
+  // MediaPipe keeps tracking state between frames; recreate it for the new stream (iOS crash fix)
+  handLandmarker?.close(); poseLandmarker?.close();
+  await startCamera();
+  await loadModels();
+});
+
+async function buildZip() {
+  const zip = new JSZip();
+  for (const t of takes) {
+    const { id, ...data } = t;
+    zip.file(fileName(t), JSON.stringify(data));
+  }
+  zip.file("manifest.json", JSON.stringify({
+    format: "stat-capture-v1", exportedAt: new Date().toISOString(), count: takes.length,
+    takes: takes.map(t => ({ file: fileName(t), signer: t.signer, type: t.type, label: t.label, frames: t.frames.length })),
+  }, null, 1));
+  return zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+}
+const zipName = () => `STAT_capture_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.zip`;
+
+// Save the zip: the iOS/Android share sheet (Save to Files, Google Drive…) where
+// available, otherwise a normal download. Safari only opens the share sheet right
+// after a tap, so if building a big zip took too long, the finished zip is kept and
+// the next tap shares it immediately.
+let zipCache = null; // { key, blob, name }
+async function saveZip() {
+  const key = `${takes.length}:${takes[takes.length - 1]?.id}`;
+  if (zipCache?.key !== key) {
+    statusEl.textContent = "Building zip…";
+    zipCache = { key, blob: await buildZip(), name: zipName() };
+  }
+  const { blob, name } = zipCache;
+  const file = new File([blob], name, { type: "application/zip" });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "STAT capture" });
+      statusEl.textContent = `Shared ${name}. Choose “Save to Files” or Google Drive.`;
+      log("shared " + name);
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") { statusEl.textContent = ""; return; }
+      if (e.name === "NotAllowedError") { statusEl.textContent = "Zip is ready. Tap Save zip again."; return; }
+      log("share failed, downloading instead: " + e.message);
+    }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  statusEl.textContent = `Downloaded ${name} (${(blob.size / 1024).toFixed(0)} KB).`;
+  log(`downloaded ${name}`);
+}
+$("zipBtn").addEventListener("click", saveZip);
+$("setupZipBtn").addEventListener("click", saveZip);
+$("undoBtn").addEventListener("click", () => {
+  const t = takes[takes.length - 1];
+  if (!t || !confirm(`Delete the last take (${t.label} #${t.take})?`)) return;
+  takes.pop(); dbDelete(t.id);
+  statusEl.textContent = `Deleted ${t.label} #${t.take}.`;
+  render();
+});
+window.addEventListener("beforeunload", e => { if (takes.length) { e.preventDefault(); e.returnValue = ""; } });
+
+// test hook for the headless smoke test (?debug=1 only): saves a take from made-up frames
+if (new URLSearchParams(location.search).has("debug")) {
+  window.__capture = {
+    takes: () => takes,
+    fakeTake(t, label, n = 30) {
+      type = t;
+      rec = { type: t, label, phase: "recording", frames: Array.from({ length: n }, (_, i) => ({ t: i * 33, hands: [], pose: null })) };
+      finishRecording();
+    },
+  };
+}
+
+await openDb();
+render();
+</script>
+</body>
+</html>
