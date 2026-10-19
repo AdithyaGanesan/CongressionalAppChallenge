@@ -440,7 +440,10 @@ function aspectFactor(trainAspect) {
 let handLandmarker, poseLandmarker;
 
 // ---- ONNX model setup ----
-const SIGN_MODEL_PATH = "models/stat_sign_model.onnx";
+// ?model=v2 loads the retrained sign model (more signs, more signers) for side-by-side testing
+const SIGN_MODEL_VERSION = params.get("model") === "v2" ? "v2" : "v1";
+const SIGN_MODEL_PATH = SIGN_MODEL_VERSION === "v2" ? "models/stat_sign_model_v2.onnx" : "models/stat_sign_model.onnx";
+const SIGN_CLASSES_PATH = SIGN_MODEL_VERSION === "v2" ? "models/sign_classes_v2.json" : "models/sign_classes.json";
 const FINGERSPELL_MODEL_PATH = "models/stat_fingerspelling_model.onnx";
 
 let signSession = null;
@@ -571,7 +574,7 @@ let signClasses = null;
 let fingerspellClasses = null;
 let letterIdx = null; // indexes of the 26 real letters (drops Kaggle's "del"/"space", which aren't ASL)
 Promise.all([
-  fetch("models/sign_classes.json").then(r => r.json()),
+  fetch(SIGN_CLASSES_PATH).then(r => r.json()),
   fetch("models/fingerspell_classes.json").then(r => r.json()),
 ]).then(([s, f]) => {
   signClasses = s;
@@ -587,7 +590,28 @@ fetch("models/phrase_rules.json").then(r => r.json()).then(j => {
 fetch("models/topic_diagrams.json").then(r => r.json()).then(j => { topics = j.topics; })
   .catch(e => console.error("topic_diagrams.json", e));
 
+// The sign models were trained on every 2nd frame of 30 fps video (FRAME_STEP = 2 in the
+// notebook), i.e. 15 frames per second, and segmentClip was tuned on the same rate. Phones
+// run 20-30 fps, which made every sign look twice as slow, so signing frames are resampled.
+const SIGN_FPS = 15;
+function resampleTo15fps(frames) {
+  const out = [];
+  let last = -Infinity;
+  for (const f of frames) {
+    if (f.t - last >= 1000 / SIGN_FPS - 5) { out.push(f); last = f.t; }
+  }
+  return out;
+}
+// v2 was trained on clips of at most 64 frames (center crop at test time); do the same
+const MAX_SEGMENT_FRAMES = 64;
+function centerCrop(seg) {
+  if (SIGN_MODEL_VERSION !== "v2" || seg.length <= MAX_SEGMENT_FRAMES) return seg;
+  const s = Math.floor((seg.length - MAX_SEGMENT_FRAMES) / 2);
+  return seg.slice(s, s + MAX_SEGMENT_FRAMES);
+}
+
 async function classifySignSegment(segmentFrames, k = 5) {
+  segmentFrames = centerCrop(segmentFrames);
   const T = segmentFrames.length;
   const flat = new Float32Array(T * 150);
   segmentFrames.forEach((f, i) => flat.set(normalizeFrame(f), i * 150));
@@ -862,7 +886,7 @@ async function processLine(frames) {
   const details = [];
   let signTokens = [];
   if (signFrames.length >= 3) {
-    for (const seg of segmentClip(signFrames.map(f => f.rawVec))) {
+    for (const seg of segmentClip(resampleTo15fps(signFrames).map(f => f.rawVec))) {
       const top = await classifySignSegment(seg);
       details.push(`seg ×${seg.length}: ` + top.slice(0, 3).map(([w, p]) => `${w} ${(p * 100).toFixed(0)}%`).join(", "));
       signTokens.push(top[0][1] >= CFG.signConfMin ? top[0][0] : "?"); // "?" = a sign the model doesn't know well
