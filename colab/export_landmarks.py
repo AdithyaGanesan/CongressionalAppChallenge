@@ -1,7 +1,7 @@
 # STAT: package the ASL Citizen landmarks already in Drive so the Claude Code
-# session can download them, and print a share link. Paste into a NEW, empty
+# session can download them. Paste into a NEW, empty
 # Colab notebook (Runtime: CPU is fine) and run this one cell.
-# It asks twice for Google permission: once to mount Drive, once to create the link.
+# It asks once for Google permission, to mount Drive.
 import os, time, zipfile
 from google.colab import drive, auth
 drive.mount("/content/drive")
@@ -19,14 +19,9 @@ with zipfile.ZipFile(ZIP, "w", zipfile.ZIP_STORED) as z:  # .npz files are alrea
             print(f"  {i}/{len(files)} added ({time.time() - t0:.0f}s)")
 print(f"zip ready: {os.path.getsize(ZIP) / 1e6:.0f} MB")
 
-# upload to Drive and make an "anyone with the link can view" link
-auth.authenticate_user()
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-svc = build("drive", "v3")
-f = svc.files().create(body={"name": "stat_landmarks_citizen.zip"},
-                       media_body=MediaFileUpload(ZIP, mimetype="application/zip", resumable=True),
-                       fields="id").execute()
-svc.permissions().create(fileId=f["id"], body={"type": "anyone", "role": "reader"}).execute()
-print("\nDone. Paste this link to Claude (and keep it private):")
-print(f"https://drive.google.com/file/d/{f['id']}/view")
+# copy into Drive, then share it by hand: right-click it in Drive -> Share ->
+# General access: "Anyone with the link" -> Copy link, and paste the link to Claude.
+# (Sharing from code needs a sign-in pop-up that can hang, so it's done by hand.)
+import shutil
+shutil.copy(ZIP, "/content/drive/MyDrive/stat_landmarks_citizen.zip")
+print("Copied to Drive as stat_landmarks_citizen.zip. Share it from Drive and paste the link to Claude.")
