@@ -259,7 +259,15 @@ def main():
     steps = a.epochs * len(tr_l)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=steps, pct_start=0.1)
     best, since, ckpt = -1, 0, f"{a.out}/best_{a.arch}.pt"
-    for ep in range(1, a.epochs + 1):
+    state_path, start = f"{a.out}/state_{a.arch}.pt", 1
+    st = torch.load(state_path, weights_only=False) if os.path.exists(state_path) else None
+    if st and st.get("classes") != classes:
+        print("saved state is for a different sign list; starting fresh"); st = None
+    if st:  # resume after an interruption, from the last finished epoch
+        model.load_state_dict(st["model"]); opt.load_state_dict(st["opt"]); sched.load_state_dict(st["sched"])
+        best, since, start = st["best"], st["since"], st["epoch"] + 1
+        print(f"resuming after epoch {st['epoch']} (best val {best:.1%})")
+    for ep in range(start, a.epochs + 1):
         model.train(); t = time.time(); tl = tn = 0
         for X, lens, y in tr_l:
             loss = F.cross_entropy(model(X, lens), y, label_smoothing=0.1)
@@ -272,6 +280,9 @@ def main():
         else:
             since += 1
         print(f"epoch {ep:2d} loss {tl / tn:.3f} | val top1 {v1:.1%} top5 {v5:.1%} | {time.time() - t:.0f}s{mark}", flush=True)
+        torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                    "epoch": ep, "best": best, "since": since, "classes": classes}, state_path + ".tmp")
+        os.replace(state_path + ".tmp", state_path)
         if since >= a.patience:
             print("early stop"); break
 
