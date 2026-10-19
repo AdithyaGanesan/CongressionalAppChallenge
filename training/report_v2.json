@@ -1,0 +1,22 @@
+{
+ "arch": "convtx",
+ "classes": 1006,
+ "train_clips": 27280,
+ "val_clips": 4381,
+ "test_clips": 3855,
+ "holdout_signers": [
+  "P15",
+  "P17",
+  "P18"
+ ],
+ "val_top1": 0.8420451951609221,
+ "test_top1": 0.7634241245136186,
+ "test_top5": 0.9211413748378728,
+ "old_model_on_its_signs": {
+  "clips": 1905,
+  "old_top1": 0.47874015748031495,
+  "new_top1_same_clips": 0.7664041994750657
+ },
+ "onnx_mb": 5.269262,
+ "onnx_max_diff": 2.86102294921875e-06
+}
