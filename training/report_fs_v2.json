@@ -1,0 +1,385 @@
+{
+ "data": "Kaggle asl-fingerspelling (CC BY 4.0): train set (67k addresses/phone numbers/URLs) + supplemental set (53k English sentences)",
+ "split": {
+  "test_signers": [
+   4,
+   43,
+   53,
+   68,
+   99,
+   128,
+   157,
+   225,
+   233,
+   251
+  ],
+  "val_signers": [
+   47,
+   136,
+   158,
+   202,
+   254
+  ],
+  "rule": "by participant_id, seed 0"
+ },
+ "input": "dominant hand, 15 fps, frames without the hand dropped, x*W/H, y, z*W/H (index.html domHand63)",
+ "params_M": 1.63,
+ "train_history": [
+  {
+   "epoch": 0,
+   "loss": 2.198,
+   "score": 0.5155,
+   "cer": 0.4845,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 588
+  },
+  {
+   "epoch": 1,
+   "loss": 1.2725,
+   "score": 0.5655,
+   "cer": 0.4345,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 650
+  },
+  {
+   "epoch": 2,
+   "loss": 1.1688,
+   "score": 0.5808,
+   "cer": 0.4192,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 580
+  },
+  {
+   "epoch": 3,
+   "loss": 1.0972,
+   "score": 0.5929,
+   "cer": 0.4071,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 568
+  },
+  {
+   "epoch": 4,
+   "loss": 1.0518,
+   "score": 0.5922,
+   "cer": 0.4078,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 576
+  },
+  {
+   "epoch": 5,
+   "loss": 1.0146,
+   "score": 0.6053,
+   "cer": 0.3947,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 587
+  },
+  {
+   "epoch": 6,
+   "loss": 0.9906,
+   "score": 0.6063,
+   "cer": 0.3937,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 571
+  },
+  {
+   "epoch": 7,
+   "loss": 0.9685,
+   "score": 0.611,
+   "cer": 0.389,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 592
+  },
+  {
+   "epoch": 8,
+   "loss": 0.952,
+   "score": 0.6164,
+   "cer": 0.3836,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 587
+  },
+  {
+   "epoch": 9,
+   "loss": 0.933,
+   "score": 0.6283,
+   "cer": 0.3717,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 582
+  },
+  {
+   "epoch": 10,
+   "loss": 0.9178,
+   "score": 0.631,
+   "cer": 0.369,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 835
+  },
+  {
+   "epoch": 11,
+   "loss": 0.9018,
+   "score": 0.6285,
+   "cer": 0.3715,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 585
+  },
+  {
+   "epoch": 12,
+   "loss": 0.8854,
+   "score": 0.6328,
+   "cer": 0.3672,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 574
+  },
+  {
+   "epoch": 13,
+   "loss": 0.8677,
+   "score": 0.6385,
+   "cer": 0.3615,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 586
+  },
+  {
+   "epoch": 14,
+   "loss": 0.8525,
+   "score": 0.6416,
+   "cer": 0.3584,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 578
+  },
+  {
+   "epoch": 15,
+   "loss": 0.8382,
+   "score": 0.6477,
+   "cer": 0.3523,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 584
+  },
+  {
+   "epoch": 16,
+   "loss": 0.8238,
+   "score": 0.6458,
+   "cer": 0.3542,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 585
+  },
+  {
+   "epoch": 17,
+   "loss": 0.8105,
+   "score": 0.6505,
+   "cer": 0.3495,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 596
+  },
+  {
+   "epoch": 18,
+   "loss": 0.7992,
+   "score": 0.6526,
+   "cer": 0.3474,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 593
+  },
+  {
+   "epoch": 19,
+   "loss": 0.7867,
+   "score": 0.6562,
+   "cer": 0.3438,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 625
+  },
+  {
+   "epoch": 20,
+   "loss": 0.7764,
+   "score": 0.6576,
+   "cer": 0.3424,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 632
+  },
+  {
+   "epoch": 21,
+   "loss": 0.7678,
+   "score": 0.6568,
+   "cer": 0.3432,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 663
+  },
+  {
+   "epoch": 22,
+   "loss": 0.7602,
+   "score": 0.66,
+   "cer": 0.34,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 656
+  },
+  {
+   "epoch": 23,
+   "loss": 0.7562,
+   "score": 0.6599,
+   "cer": 0.3401,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 679
+  },
+  {
+   "epoch": 24,
+   "loss": 0.7548,
+   "score": 0.6594,
+   "cer": 0.3406,
+   "n_phrases": 800,
+   "n_chars": 18565,
+   "sec": 686
+  }
+ ],
+ "test_heldout_signers": {
+  "known_hand_full_phrase": {
+   "score": 0.5141,
+   "cer": 0.4859,
+   "n_phrases": 10718,
+   "n_chars": 240787
+  },
+  "auto_mirror_full_phrase": {
+   "score": 0.5141,
+   "cer": 0.4859,
+   "n_phrases": 10718,
+   "n_chars": 240787
+  },
+  "auto_mirror_letters_only": {
+   "score": 0.5066,
+   "cer": 0.4934,
+   "n_phrases": 10718,
+   "n_chars": 177574
+  },
+  "by_source_auto_mirror": {
+   "train": {
+    "full_phrase": {
+     "score": 0.5104,
+     "cer": 0.4896,
+     "n_phrases": 6151,
+     "n_chars": 110352
+    },
+    "letters_only": {
+     "score": 0.4868,
+     "cer": 0.5132,
+     "n_phrases": 6151,
+     "n_chars": 67322
+    }
+   },
+   "supp": {
+    "full_phrase": {
+     "score": 0.5173,
+     "cer": 0.4827,
+     "n_phrases": 4567,
+     "n_chars": 130435
+    },
+    "letters_only": {
+     "score": 0.5186,
+     "cer": 0.4814,
+     "n_phrases": 4567,
+     "n_chars": 110252
+    }
+   }
+  },
+  "by_hand_tracking_auto_mirror": {
+   "hand_found_in_0-30pct_of_frames": {
+    "share_of_clips": 0.41,
+    "full_phrase": {
+     "score": 0.2182,
+     "cer": 0.7818,
+     "n_phrases": 4396,
+     "n_chars": 100433
+    }
+   },
+   "hand_found_in_30-60pct_of_frames": {
+    "share_of_clips": 0.284,
+    "full_phrase": {
+     "score": 0.5837,
+     "cer": 0.4163,
+     "n_phrases": 3045,
+     "n_chars": 69426
+    }
+   },
+   "hand_found_in_60-90pct_of_frames": {
+    "share_of_clips": 0.23,
+    "full_phrase": {
+     "score": 0.8433,
+     "cer": 0.1567,
+     "n_phrases": 2466,
+     "n_chars": 54390
+    }
+   },
+   "hand_found_in_90-100pct_of_frames": {
+    "share_of_clips": 0.076,
+    "full_phrase": {
+     "score": 0.9363,
+     "cer": 0.0637,
+     "n_phrases": 811,
+     "n_chars": 16538
+    }
+   }
+  }
+ },
+ "old_model_letters_only": {
+  "score": 0.0249,
+  "cer": 0.9751,
+  "n_phrases": 2000,
+  "n_chars": 32627,
+  "by_source": {
+   "train": {
+    "score": -0.0298,
+    "cer": 1.0298,
+    "n_phrases": 1167,
+    "n_chars": 12599
+   },
+   "supp": {
+    "score": 0.0592,
+    "cer": 0.9408,
+    "n_phrases": 833,
+    "n_chars": 20028
+   }
+  },
+  "note": "same held-out signers, random 2,000 of the test clips; per-frame MLP (Kaggle ASL Alphabet photos) + index.html decodeSpelling at 30 fps; no spaces or digits, so compared on letters only"
+ },
+ "english_words_after_dictionary": {
+  "all": {
+   "sentences": 600,
+   "words": 3234,
+   "word_accuracy_raw_letters": 0.259,
+   "word_accuracy_after_dictionary": 0.316
+  },
+  "hand_found_60pct+": {
+   "sentences": 180,
+   "words": 967,
+   "word_accuracy_raw_letters": 0.6,
+   "word_accuracy_after_dictionary": 0.702
+  },
+  "hand_found_90pct+": {
+   "sentences": 35,
+   "words": 188,
+   "word_accuracy_raw_letters": 0.713,
+   "word_accuracy_after_dictionary": 0.824
+  },
+  "note": "600 random held-out English sentences (supplemental set); v2 words through index.html's inferWord"
+ },
+ "attribution": "Trained on Google - American Sign Language Fingerspelling Recognition (Kaggle, CC BY 4.0)"
+}

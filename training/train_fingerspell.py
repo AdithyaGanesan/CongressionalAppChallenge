@@ -27,13 +27,22 @@ Splits (by signer, participant_id, over both sets): 10 random signers are held o
 validation (checkpoint choice), the rest train. Metrics on held-out test signers, greedy CTC decoding:
   - score = competition's normalized Levenshtein, (N - edit distance) / N summed over phrases
   - CER = edit distance / N; letters-only CER compares against the old per-frame letter model
-Results: training/report_fs_v2.json.
+Results (training/report_fs_v2.json), 10 held-out signers, 10,718 phrases, 1.63M parameters (6.6 MB ONNX),
+25 epochs on CPU (~4.5 h):
+  - score 0.514 (CER 0.486) on full phrases; the same with auto-mirror (hand unknown) as with the hand known
+  - letters only: v2 0.507 vs the old per-frame letter model 0.025 (it mostly outputs nothing: fluent
+    signers rarely hold a letter for 6 frames)
+  - the score depends on how often Kaggle's Holistic tracker found the hand: 0.94 when found in 90%+ of
+    frames, 0.84 at 60-90%, 0.58 at 30-60%, 0.22 below 30% (41% of the test clips)
+  - English sentences, words right after index.html's dictionary correction: 32% overall, 70% when the
+    hand was found in 60%+ of frames, 82% at 90%+
 
 Usage:
   python train_fingerspell.py train   --npz DIR --csv train.csv,supplemental_metadata.csv --work DIR [--hours 1.8]
   python train_fingerspell.py test    --npz DIR --csv train.csv,supplemental_metadata.csv --work DIR   (writes report)
   python train_fingerspell.py export  --work DIR --out ../models
   python train_fingerspell.py cases   --npz DIR --csv ... --work DIR --cases FILE (browser test input)
+  python train_fingerspell.py words   --npz DIR --csv ... --work DIR --cases FILE (then node tools/fs_v2_word_test.mjs FILE)
   python train_fingerspell.py old     --npz DIR --csv train.csv,supplemental_metadata.csv --work DIR   (old model on the same test set)
 """
 import argparse, glob, json, math, os, random, sys, time
@@ -480,6 +489,43 @@ def cmd_cases(a):
     print(len(out), "cases ->", a.cases)
 
 
+def cmd_words(a):
+    """Held-out English sentences -> per-word top-3 letter candidates exactly like index.html's ctcGreedy,
+    for tools/fs_v2_word_test.mjs (word accuracy after the app's dictionary correction)."""
+    seqs, phrases, pids = load_data(a.npz, a.csv)
+    sp, _, _ = split_signers(pids)
+    te = np.flatnonzero((sp == "test") & (np.array(LOADED_SRC) == "supp"))
+    te = te[np.random.RandomState(5).permutation(len(te))[:a.limit or 600]]
+    model = load_model(a.work)
+    is_letter = lambda c: c > 0 and "a" <= CHARS[c - 1] <= "z"
+    out = []
+    with torch.no_grad():
+        for i in te:
+            x = to_app_frames(seqs[i], False)
+            words, text = [[]], ""
+            if len(x):
+                t = torch.from_numpy(x)[None]
+                m = t.clone().view(1, -1, 21, 3); m[..., 0] = -m[..., 0]
+                lp, lp2 = model(t)[0], model(m.view(1, -1, 63))[0]
+                if (lp2.argmax(-1) != 0).sum() > (lp.argmax(-1) != 0).sum():
+                    lp = lp2
+                prev = 0
+                for row in lp:
+                    b = int(row.argmax())
+                    if b != 0 and b != prev:
+                        ch = CHARS[b - 1]; text += ch
+                        if ch == " ":
+                            words.append([])
+                        elif is_letter(b):
+                            top = [c for c in row.argsort(descending=True).tolist() if is_letter(c)][:3]
+                            words[-1].append([[CHARS[c - 1].upper(), float(row[c].exp())] for c in top])
+                    prev = b
+            out.append({"ref": phrases[i], "raw": text, "words": [w for w in words if w],
+                        "present": float((~np.isnan(seqs[i][:, 0])).mean())})
+    json.dump(out, open(a.cases, "w"))
+    print(len(out), "sentences ->", a.cases)
+
+
 def cmd_export(a):
     model = load_model(a.work)
     w = Exported(model).eval()
@@ -492,13 +538,15 @@ def cmd_export(a):
         x = torch.rand(1, T, 63) * 0.3 + 0.3
         ref = w(x).detach().numpy(); got = s.run(None, {"landmarks": x.numpy()})[0]
         print(T, got.shape, "max abs diff", float(np.abs(ref - got).max()))
-    json.dump({"chars": CHARS, "blank": 0, "fps": 15, "upsample": model.up}, open(os.path.join(a.out, "fingerspell_v2.json"), "w"))
+    json.dump({"chars": CHARS, "blank": 0, "fps": 15, "upsample": model.up,
+               "source": "STAT fingerspelling model v2 (training/train_fingerspell.py), trained on Google - American "
+                         "Sign Language Fingerspelling Recognition, Kaggle 2023, CC BY 4.0"}, open(os.path.join(a.out, "fingerspell_v2.json"), "w"))
     print(path, os.path.getsize(path) / 1e6, "MB")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["train", "test", "export", "old", "cases"])
+    ap.add_argument("cmd", choices=["train", "test", "export", "old", "cases", "words"])
     ap.add_argument("--cases", default="fs_cases.json")
     ap.add_argument("--npz"); ap.add_argument("--csv"); ap.add_argument("--work", default="fs_work")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "models"))
@@ -510,4 +558,4 @@ if __name__ == "__main__":
     ap.add_argument("--hours", type=float, default=1.8); ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
-    {"train": cmd_train, "test": cmd_test, "export": cmd_export, "old": cmd_old, "cases": cmd_cases}[a.cmd](a)
+    {"train": cmd_train, "test": cmd_test, "export": cmd_export, "old": cmd_old, "cases": cmd_cases, "words": cmd_words}[a.cmd](a)
