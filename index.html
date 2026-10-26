@@ -962,8 +962,8 @@ async function processLine(frames) {
 }
 
 // v2: the sequence model on the dominant hand at 15 fps (frames without the hand dropped, as in
-// training), on the clip and its mirror image (either hand can be dominant), keeping the more
-// confident one. Greedy CTC decode; a space splits words.
+// training), on the clip and its mirror image (either hand can be dominant), keeping the one
+// that reads more characters. Greedy CTC decode; a space splits words.
 async function spellV2(frames) {
   const hands = resampleTo15fps(frames).filter(f => f.domHand63).map(f => f.domHand63);
   if (hands.length < 2) return { words: [], text: "" };
@@ -977,13 +977,19 @@ async function decodeV2(flat, T) {
   for (let i = 0; i < mirrored.length; i += 3) mirrored[i] = -mirrored[i];
   const run = async x => (await fsV2Session.run({ landmarks: new ort.Tensor("float32", x, [1, T, 63]) })).logprobs;
   const a = await run(flat), b = await run(mirrored);
-  const meanMax = lp => {
+  // keep the one that reads more characters (steps whose best guess isn't blank)
+  const nonBlank = lp => {
     const [, S, C] = lp.dims;
-    let sum = 0;
-    for (let s = 0; s < S; s++) sum += Math.max(...lp.data.subarray(s * C, (s + 1) * C));
-    return sum / S;
+    let n = 0;
+    for (let s = 0; s < S; s++) {
+      const row = lp.data.subarray(s * C, (s + 1) * C);
+      let best = 0;
+      for (let c = 1; c < C; c++) if (row[c] > row[best]) best = c;
+      if (best !== 0) n++;
+    }
+    return n;
   };
-  return ctcGreedy(meanMax(b) > meanMax(a) ? b : a);
+  return ctcGreedy(nonBlank(b) > nonBlank(a) ? b : a);
 }
 
 function ctcGreedy(lp) {

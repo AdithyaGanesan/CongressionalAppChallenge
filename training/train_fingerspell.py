@@ -19,8 +19,9 @@ Domain gaps handled in training:
   - aspect ratio: Kaggle videos are portrait phone video; x is multiplied by 9/16 and then by a random
     0.75-1.4 (covers 4:3 and 16:9, portrait); rotation and noise
   - either hand dominant: left-dominant clips are mirrored so every training clip looks like one hand;
-    the app runs both the clip and its mirror image and keeps the more confident result
-    ("auto-mirror" below)
+    the app runs both the clip and its mirror image and keeps the one with more non-blank CTC steps
+    ("auto-mirror" below; on held-out signers it picks the right hand 95% of the time and scores
+    the same as knowing the hand, better than picking by average confidence)
 
 Splits (by signer, participant_id, over both sets): 10 random signers are held out for test, 5 for
 validation (checkpoint choice), the rest train. Metrics on held-out test signers, greedy CTC decoding:
@@ -254,7 +255,7 @@ def predict(model, clips, auto_mirror=False):
         if auto_mirror:
             m = t.clone().view(1, -1, 21, 3); m[..., 0] = -m[..., 0]
             lp2 = model(m.view(1, -1, 63))[0]
-            if lp2.max(-1).values.mean() > lp.max(-1).values.mean():
+            if (lp2.argmax(-1) != 0).sum() > (lp.argmax(-1) != 0).sum():  # the one that reads more characters
                 lp = lp2
         out.append(greedy(lp)[0])
     return out
@@ -383,6 +384,15 @@ def cmd_test(a):
         sel = np.flatnonzero(src == k)
         by_src[k] = {"full_phrase": score([p_auto[j] for j in sel], [refs[j] for j in sel]),
                      "letters_only": score([letters(p_auto[j]) for j in sel], [letters(refs[j]) for j in sel])}
+    # how often MediaPipe Holistic found the dominant hand in the clip; many Kaggle clips lose the hand
+    # for most frames (the app uses its own HandLandmarker, so the well-tracked rows are closer to it)
+    present = np.array([(~np.isnan(seqs[i][:, 0])).mean() for i in te])
+    by_track = {}
+    for lo, hi in [(0, .3), (.3, .6), (.6, .9), (.9, 1.01)]:
+        sel = np.flatnonzero((present >= lo) & (present < hi))
+        by_track[f"hand_found_in_{int(lo * 100)}-{min(int(hi * 100), 100)}pct_of_frames"] = {
+            "share_of_clips": round(len(sel) / len(te), 3),
+            "full_phrase": score([p_auto[j] for j in sel], [refs[j] for j in sel])}
     rep.update({
         "data": "Kaggle asl-fingerspelling (CC BY 4.0): train set (67k addresses/phone numbers/URLs) + "
                 "supplemental set (53k English sentences)",
@@ -395,6 +405,7 @@ def cmd_test(a):
             "auto_mirror_full_phrase": score(p_auto, refs),
             "auto_mirror_letters_only": score([letters(p) for p in p_auto], [letters(r) for r in refs]),
             "by_source_auto_mirror": by_src,
+            "by_hand_tracking_auto_mirror": by_track,
         },
         "examples": [{"ref": r, "pred": p} for r, p in list(zip(refs, p_auto))[:15]],
     })
