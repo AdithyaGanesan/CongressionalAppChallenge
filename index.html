@@ -445,6 +445,11 @@ const SIGN_MODEL_VERSION = params.get("model") === "v2" ? "v2" : "v1";
 const SIGN_MODEL_PATH = SIGN_MODEL_VERSION === "v2" ? "models/stat_sign_model_v2.onnx" : "models/stat_sign_model.onnx";
 const SIGN_CLASSES_PATH = SIGN_MODEL_VERSION === "v2" ? "models/sign_classes_v2.json" : "models/sign_classes.json";
 const FINGERSPELL_MODEL_PATH = "models/stat_fingerspelling_model.onnx";
+// ?fs=v2 reads fingerspelling with a sequence model trained on Google's ASL Fingerspelling data
+// (100+ Deaf signers, training/train_fingerspell.py) instead of one photo-trained letter per frame
+const FS_VERSION = params.get("fs") === "v2" ? "v2" : "v1";
+const FS_V2_MODEL_PATH = "models/stat_fingerspelling_v2.onnx";
+let fsV2Session = null, fsV2Info = null;
 
 let signSession = null;
 let fingerspellSession = null;
@@ -473,7 +478,16 @@ async function loadOnnxModels() {
   const fsLogits = fsResult.logits.data;
   console.log(`fingerspelling model: output shape OK, ${fsLogits.length} classes`);
 
-  onnxStatusEl.textContent = `ok (${signLogits.length}/${fsLogits.length})`;
+  if (FS_VERSION === "v2") {
+    [fsV2Session, fsV2Info] = await Promise.all([
+      ort.InferenceSession.create(FS_V2_MODEL_PATH, { executionProviders: ["wasm"] }),
+      fetch("models/fingerspell_v2.json").then(r => r.json()),
+    ]);
+    const r = await fsV2Session.run({ landmarks: new ort.Tensor("float32", new Float32Array(10 * 63), [1, 10, 63]) });
+    console.log(`fingerspelling model v2: output shape OK, ${r.logprobs.dims.join("x")}`);
+  }
+
+  onnxStatusEl.textContent = `ok (${signLogits.length}/${fsLogits.length}${FS_VERSION === "v2" ? "/v2" : ""})`;
 }
 
 let facingMode = "user";
@@ -853,8 +867,9 @@ function spanFeatures(frames, probs, s, scale) {
   const letterConf = tops.length ? tops.reduce((a, b) => a + b, 0) / tops.length : 0;
   return { travel: +travel.toFixed(2), oneHand: +oneHand.toFixed(2), letterConf: +letterConf.toFixed(2) };
 }
+// v2 does not use the old letter model's confidence: it was the part that failed for real signers
 const looksSpelled = (ft, nLetters) => ft.travel < CFG.spellMaxTravel && ft.oneHand >= CFG.spellMinOneHand &&
-  ft.letterConf >= CFG.spellMinConf && nLetters >= CFG.spellMinLetters;
+  (FS_VERSION === "v2" || ft.letterConf >= CFG.spellMinConf) && nLetters >= CFG.spellMinLetters;
 
 // A line is signs, fingerspelling, or signs followed by a fingerspelled word
 // (TODAY C-A-L-I-B-R-A-T-E). Find the earliest letter run from which the rest of
@@ -866,22 +881,36 @@ async function processLine(frames) {
   const scale = median(frames.filter(f => f.scale).map(f => f.scale)) || 1;
   const runs = decodeSpelling(frames, probs, scale).runs;
 
-  let split = -1, tail = null;
-  if (modeOverride === "auto") {
+  let split = -1, tail = null, spellStart = -1, v2 = null;
+  if (modeOverride === "auto" && FS_VERSION === "v2") {
+    // v2: same candidate start points, but the letter count comes from the sequence model
+    const starts = runs.length ? runs.map(r => r.start) : [0];
+    for (let i = 0; i < starts.length; i++) {
+      const ft = spanFeatures(frames, probs, starts[i], scale);
+      if (!looksSpelled(ft, Infinity)) continue;
+      const dec = await spellV2(frames.slice(starts[i]));
+      if (looksSpelled(ft, dec.words.flat().length)) { spellStart = starts[i]; tail = ft; v2 = dec; break; }
+    }
+  } else if (modeOverride === "auto") {
     for (let i = 0; i < runs.length; i++) {
       const ft = spanFeatures(frames, probs, runs[i].start, scale);
-      if (looksSpelled(ft, runs.length - i)) { split = i; tail = ft; break; }
+      if (looksSpelled(ft, runs.length - i)) { split = i; tail = ft; spellStart = runs[i].start; break; }
     }
   }
   let signFrames = [], spellRuns = [];
-  if (modeOverride === "spell") spellRuns = runs;
-  else if (modeOverride === "sign" || split < 0) signFrames = frames;
+  if (modeOverride === "spell") {
+    spellStart = 0;
+    if (FS_VERSION === "v2") v2 = await spellV2(frames); else spellRuns = runs;
+  } else if (modeOverride === "sign" || spellStart < 0) signFrames = frames;
   else {
-    const s = runs[split].start;
-    spellRuns = runs.slice(split);
+    const s = spellStart;
+    if (!v2) spellRuns = runs.slice(split);
     // a short lead-in is just the hand rising into place, not a sign
     if (frames[s].t - frames[0].t >= CFG.signPrefixMs) signFrames = frames.slice(0, s);
   }
+  // v2 words → the same per-letter top-3 lists decodeSpelling gives, one list per word
+  const spellWords = v2 ? v2.words.map(cands => ({ cands, letters: cands.map(c => c[0][0]) }))
+    : spellRuns.length ? [{ cands: spellRuns.map(r => r.top3), letters: spellRuns.map(r => r.letter) }] : [];
 
   const details = [];
   let signTokens = [];
@@ -893,30 +922,31 @@ async function processLine(frames) {
     }
   }
   // unknown segments right before fingerspelling are the hand moving into place
-  if (spellRuns.length && signTokens.every(t => t === "?")) {
+  if (spellWords.length && signTokens.every(t => t === "?")) {
     if (signTokens.length) details.push(`(dropped ${signTokens.length} unknown lead-in segment(s))`);
     signTokens = [];
   }
 
   const tokens = [...signTokens], raws = [];
   if (signTokens.length) raws.push(signTokens.join("  "));
-  if (spellRuns.length) {
-    const letters = spellRuns.map(r => r.letter).join("-");
-    const cands = spellRuns.map(r => r.top3);
+  if (v2) details.push(`v2 read: "${v2.text}"`);
+  for (const { cands, letters: ls } of spellWords) {
+    const letters = ls.join("-");
     const expectedWord = EXPECTED.length ? matchExpected(cands, EXPECTED, CFG.expectMaxEdit) : null;
     const word = expectedWord ?? inferWord(cands).word;
     if (expectedWord) details.push(`expected word: ${expectedWord}`);
     tokens.push(word); // fingerspelled words are lower case, sign glosses upper case
     // show the correction when it changed the letters, e.g. C-A-L-L-B-R-A-T-E → calibrate
     raws.push(word.toUpperCase() === letters.replace(/-/g, "") ? letters : `${letters} → ${word}`);
-    details.push(...spellRuns.map(r => `${r.letter} ×${r.len}: ` + r.top3.map(([l, p]) => `${l} ${(p * 100).toFixed(0)}%`).join(", ")));
+    if (v2) details.push(...cands.map(c => c.map(([l, p]) => `${l} ${(p * 100).toFixed(0)}%`).join(", ")));
   }
+  details.push(...spellRuns.map(r => `${r.letter} ×${r.len}: ` + r.top3.map(([l, p]) => `${l} ${(p * 100).toFixed(0)}%`).join(", ")));
   if (!tokens.length && modeOverride === "spell") raws.push("(no letters held long enough)");
-  const kind = modeOverride === "spell" || (spellRuns.length && !signTokens.length) ? "spell"
-    : spellRuns.length ? "sign+spell" : "sign";
+  const kind = modeOverride === "spell" || (spellWords.length && !signTokens.length) ? "spell"
+    : spellWords.length ? "sign+spell" : "sign";
   const entry = {
     tokens, raw: raws.join("  "), kind,
-    spelledLast: spellRuns.length > 0,
+    spelledLast: spellWords.length > 0,
     startT: frames[0].t, endT: frames[frames.length - 1].t,
   };
 
@@ -924,12 +954,66 @@ async function processLine(frames) {
   const decision = `${kind.toUpperCase()} ${modeOverride === "auto" ? "(auto)" : "(forced)"} ` +
     `${frames.length} frames, ${Math.round(entry.endT - entry.startT)} ms, ${runs.length} letter runs\n` +
     `whole line: ${JSON.stringify(whole)}\n` +
-    (tail ? `spelling from frame ${runs[split].start}: ${JSON.stringify(tail)}` : "no fingerspelled part found");
+    (tail ? `spelling from frame ${spellStart}: ${JSON.stringify(tail)}` : "no fingerspelled part found");
   dlog("line:", decision, details);
   lastLineDebug = `${decision}\n${details.join("\n")}`;
   renderDebug();
   addLine(entry);
 }
+
+// v2: the sequence model on the dominant hand at 15 fps (frames without the hand dropped, as in
+// training), on the clip and its mirror image (either hand can be dominant), keeping the more
+// confident one. Greedy CTC decode; a space splits words.
+async function spellV2(frames) {
+  const hands = resampleTo15fps(frames).filter(f => f.domHand63).map(f => f.domHand63);
+  if (hands.length < 2) return { words: [], text: "" };
+  const flat = new Float32Array(hands.length * 63);
+  hands.forEach((h, i) => flat.set(h, i * 63));
+  return decodeV2(flat, hands.length);
+}
+
+async function decodeV2(flat, T) {
+  const mirrored = new Float32Array(flat);
+  for (let i = 0; i < mirrored.length; i += 3) mirrored[i] = -mirrored[i];
+  const run = async x => (await fsV2Session.run({ landmarks: new ort.Tensor("float32", x, [1, T, 63]) })).logprobs;
+  const a = await run(flat), b = await run(mirrored);
+  const meanMax = lp => {
+    const [, S, C] = lp.dims;
+    let sum = 0;
+    for (let s = 0; s < S; s++) sum += Math.max(...lp.data.subarray(s * C, (s + 1) * C));
+    return sum / S;
+  };
+  return ctcGreedy(meanMax(b) > meanMax(a) ? b : a);
+}
+
+function ctcGreedy(lp) {
+  const [, S, C] = lp.dims, chars = fsV2Info.chars;
+  const isLetter = c => c > 0 && /[a-z]/.test(chars[c - 1]);
+  const words = [[]];
+  let text = "", prev = 0;
+  for (let s = 0; s < S; s++) {
+    const row = lp.data.subarray(s * C, (s + 1) * C);
+    let best = 0;
+    for (let c = 1; c < C; c++) if (row[c] > row[best]) best = c;
+    if (best !== 0 && best !== prev) {
+      const ch = chars[best - 1];
+      text += ch;
+      if (ch === " ") words.push([]);
+      else if (isLetter(best)) {
+        const top3 = [...row.keys()].filter(isLetter).sort((x, y) => row[y] - row[x]).slice(0, 3)
+          .map(c => [chars[c - 1].toUpperCase(), Math.exp(row[c])]);
+        words[words.length - 1].push(top3);
+      }
+    }
+    prev = best;
+  }
+  return { words: words.filter(w => w.length), text };
+}
+// for the headless browser test (tools/fs_v2_browser_test.mjs)
+if (FS_VERSION === "v2") window.statTest = {
+  decodeV2: async (arr, T) => (await decodeV2(new Float32Array(arr), T)).text,
+  processLine, transcript: () => transcript, setMode: m => { modeOverride = m; },
+};
 
 // Fingerspelling line → letters. Smooth the per-frame top letter, keep runs of the
 // same letter lasting ≥ letterMinFrames, and merge two runs of the same letter
