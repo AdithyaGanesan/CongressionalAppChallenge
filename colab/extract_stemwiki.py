@@ -2,10 +2,12 @@
 # One cell. Run the same cell in several Colab notebooks at once, each with a different SLICE
 # (0, 1, 2, ...) and the same NUM_SLICES. Safe to re-run after a disconnect: it skips videos
 # already saved. Output: one .npz per video in Google Drive (private; never put it on GitHub).
-SLICE = 0              # this notebook's slice: 0, 1, 2 ... up to NUM_SLICES - 1
-NUM_SLICES = 3         # how many notebooks you run in parallel
-TARGET_HOURS = 40      # total hours of video wanted across ALL slices (316 h = everything)
-WORKERS = 2            # Colab free CPUs; on your own computer use the number of CPU cores
+# Settings. If you run this through the short loader cell (see colab/README.md), the values you
+# set there are kept; otherwise these defaults apply.
+SLICE = globals().get("SLICE", 0)                # this notebook's slice: 0, 1, 2 ... up to NUM_SLICES - 1
+NUM_SLICES = globals().get("NUM_SLICES", 3)      # how many notebooks you run in parallel
+TARGET_HOURS = globals().get("TARGET_HOURS", 40) # total hours of video across ALL slices (316 h = everything)
+WORKERS = globals().get("WORKERS", 2)            # Colab free CPUs; on your own computer use its CPU cores
 
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
