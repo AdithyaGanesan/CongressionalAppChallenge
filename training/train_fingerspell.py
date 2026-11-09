@@ -56,6 +56,10 @@ NCLS = len(CHARS) + 1
 KAGGLE_ASPECT = 9 / 16  # width / height of the (portrait) training videos
 SEED = 0
 N_TEST_SIGNERS, N_VAL_SIGNERS = 10, 5
+# frame rates (the Kaggle videos are 30 fps). Training samples a random rate in FPS_RANGE;
+# validation and tests use TEST_FPS. v2 was trained on ~11-21 fps and tested at 15.
+FPS_RANGE = (30 / 2.8, 30 / 1.4)
+TEST_FPS = 15.0
 
 
 # ---------------- data ----------------
@@ -97,10 +101,10 @@ def to_app_frames(dom, train, rng=np.random):
     """Full-rate dominant-hand clip (NaN = missing) -> what the app would send: 15 fps, present frames only."""
     T = len(dom)
     if train:
-        step = 2 * rng.uniform(0.7, 1.4)
+        step = 30 / rng.uniform(*FPS_RANGE)
         idx = np.floor(np.arange(rng.uniform(0, step), T, step)).astype(int)
     else:
-        idx = np.arange(0, T, 2)
+        idx = np.floor(np.arange(0, T, 30 / TEST_FPS)).astype(int)
     x = dom[idx]
     x = x[~np.isnan(x).any(1)]
     if train and len(x) > 8:
@@ -587,5 +591,10 @@ if __name__ == "__main__":
     ap.add_argument("--bs-frames", dest="bs_frames", type=int, default=4096)
     ap.add_argument("--hours", type=float, default=1.8); ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--fps-range", dest="fps_range", default=None, help="training frame rates, e.g. 10,30")
+    ap.add_argument("--test-fps", dest="test_fps", type=float, default=15.0)
     a = ap.parse_args()
+    if a.fps_range:
+        FPS_RANGE = tuple(float(v) for v in a.fps_range.split(","))
+    TEST_FPS = a.test_fps
     {"train": cmd_train, "test": cmd_test, "export": cmd_export, "old": cmd_old, "cases": cmd_cases, "words": cmd_words, "lp": cmd_lp}[a.cmd](a)
