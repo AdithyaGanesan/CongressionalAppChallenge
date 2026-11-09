@@ -847,6 +847,58 @@ function scoreWord(data, C, span, chars, expected = []) {
   }
   return { word: best, raw, source };
 }
+// Whole-line decoding: a CTC prefix beam search over the model output that scores each finished
+// word with the dictionary (frequency prior, penalty for non-words), so word boundaries are
+// chosen together with the words ("har desto" vs "hardest to"). Words with digits or symbols
+// (addresses, URLs) are left as read.
+const BEAM = { width: 12, minProb: 0.002, prior: 0.3, oov: 4.0 };
+function lineWordScore(w) {
+  if (!w || !/^[a-z]+$/.test(w)) return 0;
+  return dictionary && dictionary[w] ? BEAM.prior * Math.log(dictionary[w] + 1) : -BEAM.oov;
+}
+function ctcBeamLine(data, S, C, chars) {
+  const space = chars.indexOf(" ") + 1;
+  const lse = (a, b) => a === NEG ? b : b === NEG ? a : Math.max(a, b) + Math.log1p(Math.exp(-Math.abs(a - b)));
+  // beam entry: prefix text -> { b: log P(ends in blank), n: log P(ends in a char), lm: word scores so far, last: last class }
+  let beams = new Map([["", { b: 0, n: NEG, lm: 0, last: 0 }]]);
+  const minLp = Math.log(BEAM.minProb);
+  for (let s = 0; s < S; s++) {
+    const row = s * C, next = new Map();
+    const add = (text, field, v, lm, last) => {
+      let e = next.get(text);
+      if (!e) { e = { b: NEG, n: NEG, lm, last }; next.set(text, e); }
+      e[field] = lse(e[field], v);
+    };
+    const cands = [];
+    for (let c = 1; c < C; c++) if (data[row + c] > minLp) cands.push(c);
+    for (const [text, e] of beams) {
+      const tot = lse(e.b, e.n);
+      add(text, "b", tot + data[row], e.lm, e.last); // blank
+      for (const c of cands) {
+        const p = data[row + c];
+        if (c === e.last) {
+          add(text, "n", e.n + p, e.lm, c);           // repeat collapses
+          if (e.b > NEG) extend(text, c, e.b + p, e.lm);
+        } else extend(text, c, tot + p, e.lm);
+      }
+    }
+    function extend(text, c, v, lm) {
+      if (c === space) {
+        if (!text || text.endsWith(" ")) return;      // no leading or double spaces
+        const word = text.slice(text.lastIndexOf(" ") + 1);
+        add(text + " ", "n", v, lm + lineWordScore(word), c);
+      } else add(text + chars[c - 1], "n", v, lm, c);
+    }
+    beams = new Map([...next].sort((x, y) => (lse(y[1].b, y[1].n) + y[1].lm) - (lse(x[1].b, x[1].n) + x[1].lm)).slice(0, BEAM.width));
+  }
+  let best = "", bestScore = -Infinity;
+  for (const [text, e] of beams) {
+    const t = text.trimEnd(), last = t.slice(t.lastIndexOf(" ") + 1);
+    const sc = lse(e.b, e.n) + e.lm + (text.endsWith(" ") ? 0 : lineWordScore(last));
+    if (sc > bestScore) { best = t; bestScore = sc; }
+  }
+  return best.split(" ").filter(Boolean);
+}
 // ---- end word correction ----
 
 // ============================================================
