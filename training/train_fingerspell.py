@@ -43,6 +43,7 @@ Usage:
   python train_fingerspell.py export  --work DIR --out ../models
   python train_fingerspell.py cases   --npz DIR --csv ... --work DIR --cases FILE (browser test input)
   python train_fingerspell.py words   --npz DIR --csv ... --work DIR --cases FILE (then node tools/fs_v2_word_test.mjs FILE)
+  python train_fingerspell.py lp      --npz DIR --csv ... --cases FILE (model log-probabilities for the word test)
   python train_fingerspell.py old     --npz DIR --csv train.csv,supplemental_metadata.csv --work DIR   (old model on the same test set)
 """
 import argparse, glob, json, math, os, random, sys, time
@@ -526,6 +527,35 @@ def cmd_words(a):
     print(len(out), "sentences ->", a.cases)
 
 
+def cmd_lp(a):
+    """Held-out English sentences -> the exported ONNX model's log-probabilities, as FILE (index, JSON)
+    and FILE.bin (float32), for tools/fs_v2_word_test.mjs. Needs only the committed model, no checkpoint."""
+    import onnxruntime as ort
+    seqs, phrases, pids = load_data(a.npz, a.csv)
+    sp, test_s, _ = split_signers(pids)
+    te = np.flatnonzero((sp == "test") & (np.array(LOADED_SRC) == "supp"))
+    te = te[np.random.RandomState(5).permutation(len(te))[:a.limit or len(te)]]
+    sess = ort.InferenceSession(os.path.join(a.models, "stat_fingerspelling_v2.onnx"))
+    run = lambda v: sess.run(None, {"landmarks": v[None].astype(np.float32)})[0][0]
+    index, off = [], 0
+    with open(a.cases + ".bin", "wb") as f:
+        for i in te:
+            x = to_app_frames(seqs[i], False)
+            if len(x) < 2:
+                continue
+            m = x.reshape(-1, 21, 3).copy(); m[..., 0] = -m[..., 0]
+            lp, lp2 = run(x), run(m.reshape(-1, 63))
+            if (lp2.argmax(-1) != 0).sum() > (lp.argmax(-1) != 0).sum():  # same rule as index.html decodeV2
+                lp = lp2
+            lp = lp.astype(np.float32)
+            f.write(lp.tobytes())
+            index.append({"ref": phrases[i], "S": int(lp.shape[0]), "C": int(lp.shape[1]), "offset": off,
+                          "signer": int(pids[i]), "present": float((~np.isnan(seqs[i][:, 0])).mean())})
+            off += lp.size
+    json.dump({"test_signers": test_s, "cases": index}, open(a.cases, "w"))
+    print(len(index), "sentences ->", a.cases, "test signers", test_s)
+
+
 def cmd_export(a):
     model = load_model(a.work)
     w = Exported(model).eval()
@@ -546,7 +576,7 @@ def cmd_export(a):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["train", "test", "export", "old", "cases", "words"])
+    ap.add_argument("cmd", choices=["train", "test", "export", "old", "cases", "words", "lp"])
     ap.add_argument("--cases", default="fs_cases.json")
     ap.add_argument("--npz"); ap.add_argument("--csv"); ap.add_argument("--work", default="fs_work")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "models"))
@@ -558,4 +588,4 @@ if __name__ == "__main__":
     ap.add_argument("--hours", type=float, default=1.8); ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
-    {"train": cmd_train, "test": cmd_test, "export": cmd_export, "old": cmd_old, "cases": cmd_cases, "words": cmd_words}[a.cmd](a)
+    {"train": cmd_train, "test": cmd_test, "export": cmd_export, "old": cmd_old, "cases": cmd_cases, "words": cmd_words, "lp": cmd_lp}[a.cmd](a)

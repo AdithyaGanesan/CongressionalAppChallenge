@@ -254,6 +254,8 @@ const CFG = {
   segMin: numParam("segMin", 3), segSmooth: numParam("segSmooth", 3), segDist: numParam("segDist", 3),
   // 1 = merge the same sign repeated in a row and drop unknown "?" pieces between signs
   mergeRepeats: numParam("mergeRepeats", 0),
+  // fingerspelling v2: 1 = score whole dictionary words against the model, 0 = repair its top-3 letters
+  wholeWord: numParam("ww", 1),
   // a fingerspelled line within this long (hands-down gap) of a line ending in a spelled word continues it
   joinMs: numParam("joinMs", 3000),
   // expected words snap when edit distance ≤ this × word length
@@ -763,6 +765,88 @@ function matchExpected(letterCandidates, expected, maxFrac) {
   }
   return best;
 }
+// ---- whole-word scoring (fingerspelling v2) ----
+// The v2 model gives, for every time step, a probability for each character. Instead of taking
+// its best letters and then repairing them with the dictionary, score whole dictionary words
+// against those probabilities (the CTC forward algorithm), so "arch" vs "such" is decided by
+// which word fits the whole hand motion. A word-frequency prior breaks near ties, and the letters
+// as read are kept when no dictionary word fits clearly better (names, rare terms).
+// Tuned on held-out signers with tools/fs_v2_word_test.mjs.
+const WW = { prior: 0.3, oov: 3.0, plausible: 0.02, lenSlack: 2, expectBonus: 6 };
+const NEG = -1e30;
+function logAdd3(a, b, c) {
+  const m = Math.max(a, b, c);
+  return m <= NEG ? NEG : m + Math.log(Math.exp(a - m) + Math.exp(b - m) + Math.exp(c - m));
+}
+// log P(labels | steps s0..s1) for a CTC model; data = [S*C] log-probabilities, class 0 = blank
+function ctcLogProb(data, C, s0, s1, labels) {
+  const L = labels.length, N = 2 * L + 1;
+  if (s1 - s0 < L) return NEG;
+  let a = new Float64Array(N).fill(NEG), b = new Float64Array(N);
+  a[0] = data[s0 * C];
+  if (L) a[1] = data[s0 * C + labels[0]];
+  for (let s = s0 + 1; s < s1; s++) {
+    const row = s * C;
+    for (let k = 0; k < N; k++) {
+      const j = k >> 1, odd = k & 1;
+      const skip = odd && j > 0 && labels[j] !== labels[j - 1] ? a[k - 2] : NEG;
+      const v = logAdd3(a[k], k > 0 ? a[k - 1] : NEG, skip);
+      b[k] = v <= NEG ? NEG : v + data[row + (odd ? labels[j] : 0)];
+    }
+    const t = a; a = b; b = t;
+  }
+  return logAdd3(a[N - 1], N > 1 ? a[N - 2] : NEG, NEG);
+}
+// Greedy read of the model output, split into words with their time-step spans
+function ctcWordSpans(data, S, C, chars) {
+  const words = [];
+  let text = "", prev = 0, cur = null, start = 0;
+  const close = end => { if (cur !== null) words.push({ raw: cur, s0: start, s1: end }); cur = null; };
+  for (let s = 0; s < S; s++) {
+    let best = 0;
+    for (let c = 1; c < C; c++) if (data[s * C + c] > data[s * C + best]) best = c;
+    if (best !== 0 && best !== prev) {
+      const ch = chars[best - 1];
+      text += ch;
+      if (ch === " ") { close(s); start = s + 1; }
+      else cur = (cur ?? "") + ch;
+    }
+    prev = best;
+  }
+  close(S);
+  return { words, text };
+}
+let wordsByLen = null;
+function scoreWord(data, C, span, chars, expected = []) {
+  const raw = span.raw;
+  if (!dictionary || !/^[a-z]+$/.test(raw)) return { word: raw, raw, source: "as read" }; // numbers, URLs…
+  if (!wordsByLen) {
+    wordsByLen = [];
+    for (const w of Object.keys(dictionary)) if (/^[a-z]+$/.test(w)) (wordsByLen[w.length] ??= []).push(w);
+  }
+  const cls = ch => chars.indexOf(ch) + 1;
+  // letters that are plausible somewhere in this span; candidate words may only use these
+  const ok = new Uint8Array(C);
+  const thr = Math.log(WW.plausible);
+  for (let s = span.s0; s < span.s1; s++) for (let c = 1; c < C; c++) if (data[s * C + c] > thr) ok[c] = 1;
+  const lp = w => ctcLogProb(data, C, span.s0, span.s1, [...w].map(cls));
+  const prior = w => WW.prior * Math.log((dictionary[w] || 0) + 1);
+  let best = raw, bestScore = lp(raw) + (dictionary[raw] ? prior(raw) : -WW.oov), source = dictionary[raw] ? "word" : "as read";
+  for (let len = Math.max(1, raw.length - WW.lenSlack); len <= raw.length + WW.lenSlack; len++) {
+    for (const w of wordsByLen[len] || []) {
+      let plausible = true;
+      for (let i = 0; i < w.length; i++) if (!ok[cls(w[i])]) { plausible = false; break; }
+      if (!plausible) continue;
+      const sc = lp(w) + prior(w);
+      if (sc > bestScore) { best = w; bestScore = sc; source = "word"; }
+    }
+  }
+  for (const w of expected) {
+    const sc = lp(w) + prior(w) + WW.expectBonus;
+    if (sc > bestScore) { best = w; bestScore = sc; source = "expected"; }
+  }
+  return { word: best, raw, source };
+}
 // ---- end word correction ----
 
 // ============================================================
@@ -946,7 +1030,8 @@ async function processLine(frames) {
     if (frames[s].t - frames[0].t >= CFG.signPrefixMs) signFrames = frames.slice(0, s);
   }
   // v2 words → the same per-letter top-3 lists decodeSpelling gives, one list per word
-  const spellWords = v2 ? v2.words.map(cands => ({ cands, letters: cands.map(c => c[0][0]) }))
+  const spellWords = v2?.scored ? v2.scored.map(w => ({ word: w.word, source: w.source, cands: [], letters: [...w.raw.toUpperCase()] }))
+    : v2 ? v2.words.map(cands => ({ cands, letters: cands.map(c => c[0][0]) }))
     : spellRuns.length ? [{ cands: spellRuns.map(r => r.top3), letters: spellRuns.map(r => r.letter) }] : [];
 
   const details = [];
@@ -973,11 +1058,12 @@ async function processLine(frames) {
   const tokens = [...signTokens], raws = [];
   if (signTokens.length) raws.push(signTokens.join("  "));
   if (v2) details.push(`v2 read: "${v2.text}"`);
-  for (const { cands, letters: ls } of spellWords) {
+  for (const { cands, letters: ls, word: scoredWord, source } of spellWords) {
     const letters = ls.join("-");
-    const expectedWord = EXPECTED.length ? matchExpected(cands, EXPECTED, CFG.expectMaxEdit) : null;
-    const word = expectedWord ?? inferWord(cands).word;
-    if (expectedWord) details.push(`expected word: ${expectedWord}`);
+    const expectedWord = !scoredWord && EXPECTED.length ? matchExpected(cands, EXPECTED, CFG.expectMaxEdit) : null;
+    const word = scoredWord ?? expectedWord ?? inferWord(cands).word;
+    if (expectedWord || source === "expected") details.push(`expected word: ${word}`);
+    if (scoredWord) details.push(`${letters} -> ${word} (${source})`);
     tokens.push(word); // fingerspelled words are lower case, sign glosses upper case
     // show the correction when it changed the letters, e.g. C-A-L-L-B-R-A-T-E → calibrate
     raws.push(word.toUpperCase() === letters.replace(/-/g, "") ? letters : `${letters} → ${word}`);
@@ -1057,7 +1143,10 @@ function ctcGreedy(lp) {
     }
     prev = best;
   }
-  return { words: words.filter(w => w.length), text };
+  // whole-word scoring of each word against the model's probabilities (ww=0 turns it off)
+  const scored = CFG.wholeWord
+    ? ctcWordSpans(lp.data, S, C, chars).words.map(w => scoreWord(lp.data, C, w, chars, EXPECTED)) : null;
+  return { words: words.filter(w => w.length), text, scored };
 }
 // for the headless browser test (tools/fs_v2_browser_test.mjs)
 if (FS_VERSION === "v2") window.statTest = {
