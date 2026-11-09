@@ -79,6 +79,14 @@
   #indicator.listening .dot { background: var(--listen); animation: pulse 1s infinite; }
   #indicator.thinking .dot { background: var(--think); animation: pulse 0.5s infinite; }
   @keyframes pulse { 50% { opacity: 0.3; } }
+  #trackPill {
+    position: absolute; top: 10px; right: 10px; z-index: 2;
+    background: rgba(13, 17, 23, 0.75); border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 12px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+  }
+  #trackPill.good { color: #7ee2a8; }
+  #trackPill.fair { color: var(--think); }
+  #trackPill.poor { color: var(--bad); }
   #hud {
     position: absolute; top: 48px; left: 10px; right: 10px;
     display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; pointer-events: none;
@@ -160,6 +168,7 @@
     <video id="video" playsinline muted autoplay></video>
     <canvas id="overlay"></canvas>
     <div id="indicator"><span class="dot"></span><span id="indicatorText">Ready</span></div>
+    <div id="trackPill" hidden title="Share of frames in the current line where a hand was found"></div>
     <div id="hud" class="debug-only">
       <div class="pill"><b>FPS</b> <span id="fps">–</span></div>
       <div class="pill"><b>Hands up</b> <span id="handCount">0</span></div>
@@ -240,6 +249,11 @@ const CFG = {
   signArea: numParam("signArea", 0.9),
   // a sign before a fingerspelled word must last this long (shorter = the hand rising into place)
   signPrefixMs: numParam("signPrefixMs", 450),
+  // cutting signing into signs (segmentClip): minimum piece length, smoothing and spacing of
+  // motion dips, in 15 fps frames. segMin=0 classifies each line as one sign (no cutting).
+  segMin: numParam("segMin", 3), segSmooth: numParam("segSmooth", 3), segDist: numParam("segDist", 3),
+  // 1 = merge the same sign repeated in a row and drop unknown "?" pieces between signs
+  mergeRepeats: numParam("mergeRepeats", 0),
   // a fingerspelled line within this long (hands-down gap) of a line ending in a spelled word continues it
   joinMs: numParam("joinMs", 3000),
   // expected words snap when edit distance ≤ this × word length
@@ -431,10 +445,15 @@ Promise.all([
   console.log(`dictionary loaded: ${Object.keys(eng).length} English + ${Object.keys(stem).length} STEM + ${(domain.words || []).length} lab words`);
 });
 
+// Camera frame size. Replaying a recording (debug evaluation) uses the recording's size.
+let replaySize = null;
+const frameW = () => replaySize ? replaySize.w : video.videoWidth;
+const frameH = () => replaySize ? replaySize.h : video.videoHeight;
+
 // Rescale x and z so the hand/body geometry has the same proportions as in training.
 function aspectFactor(trainAspect) {
-  if (!trainAspect || !video.videoWidth || !video.videoHeight) return 1;
-  return (video.videoWidth / video.videoHeight) / trainAspect;
+  if (!trainAspect || !frameW() || !frameH()) return 1;
+  return (frameW() / frameH()) / trainAspect;
 }
 
 let handLandmarker, poseLandmarker;
@@ -761,7 +780,7 @@ function signingAreaY(poseLm) {
 function analyzeFrame(handResult, poseResult, t) {
   const poseLm = poseResult.landmarks[0] || null;
   const areaY = signingAreaY(poseLm);
-  const W = video.videoWidth || 1, H = video.videoHeight || 1;
+  const W = frameW() || 1, H = frameH() || 1;
   const up = [];
   handResult.landmarks.forEach((lm, i) => {
     if (lm[0].y < areaY) up.push({ lm, label: handResult.handedness[i]?.[0]?.categoryName });
@@ -783,6 +802,7 @@ function analyzeFrame(handResult, poseResult, t) {
     t,
     rawVec: buildFrameVector(handResult, poseResult),
     handsUp: up.length,
+    handsSeen: handResult.landmarks.length,
     domHand63,
     domWrist,
     scale,
@@ -811,6 +831,7 @@ function lineFrame(f) {
   }
   line.frames.push(f);
   if (up || manualRecording) { line.lastUpAt = f.t; line.lastUpIndex = line.frames.length; }
+  showTracking(line.frames.slice(0, line.lastUpIndex));
   if (manualRecording) {
     if (f.t - line.startedAt > MAX_RECORDING_MS) stopManual();
     return;
@@ -831,6 +852,22 @@ function endLine() {
     .then(() => processLine(frames))
     .catch(e => { console.error(e); })
     .finally(() => { busyCount--; updateIndicator(); });
+}
+
+// Hand tracking meter: share of frames in the current (or last) line where MediaPipe
+// found a hand. Lost hands are the main cause of misreads, and better light, a plainer
+// background or stepping back usually fixes them.
+const trackPillEl = document.getElementById("trackPill");
+function trackingShare(frames) {
+  return frames.length ? frames.filter(f => f.handsSeen > 0).length / frames.length : null;
+}
+function showTracking(frames) {
+  const share = trackingShare(frames);
+  if (share === null || frames.length < 5) return;
+  const pct = Math.round(share * 100);
+  trackPillEl.hidden = false;
+  trackPillEl.className = pct >= 85 ? "good" : pct >= 60 ? "fair" : "poor";
+  trackPillEl.textContent = pct >= 85 ? `Hands tracked ${pct}%` : `Hands tracked ${pct}%: more light or step back`;
 }
 
 function updateIndicator() {
@@ -915,11 +952,17 @@ async function processLine(frames) {
   const details = [];
   let signTokens = [];
   if (signFrames.length >= 3) {
-    for (const seg of segmentClip(resampleTo15fps(signFrames).map(f => f.rawVec))) {
+    const vecs = resampleTo15fps(signFrames).map(f => f.rawVec);
+    const segs = CFG.segMin > 0 ? segmentClip(vecs, CFG.segMin, CFG.segSmooth, CFG.segDist) : [vecs];
+    for (const seg of segs) {
       const top = await classifySignSegment(seg);
       details.push(`seg ×${seg.length}: ` + top.slice(0, 3).map(([w, p]) => `${w} ${(p * 100).toFixed(0)}%`).join(", "));
       signTokens.push(top[0][1] >= CFG.signConfMin ? top[0][0] : "?"); // "?" = a sign the model doesn't know well
     }
+  }
+  if (CFG.mergeRepeats) {
+    // one sign cut into several pieces reads as the same sign repeated: keep it once
+    signTokens = signTokens.filter((t, i) => t !== "?" && t !== signTokens.slice(0, i).filter(x => x !== "?").at(-1));
   }
   // unknown segments right before fingerspelling are the hand moving into place
   if (spellWords.length && signTokens.every(t => t === "?")) {
@@ -957,6 +1000,7 @@ async function processLine(frames) {
     (tail ? `spelling from frame ${spellStart}: ${JSON.stringify(tail)}` : "no fingerspelled part found");
   dlog("line:", decision, details);
   lastLineDebug = `${decision}\n${details.join("\n")}`;
+  if (DEBUG) lineLog.push({ kind, decision, details, tracking: trackingShare(frames) });
   renderDebug();
   addLine(entry);
 }
@@ -1442,7 +1486,53 @@ window.addEventListener("resize", () => {
 });
 
 // test hooks for the headless smoke test (debug mode only)
-if (DEBUG) window.__stat = { addLine, applyRules, inferWord, decodeSpelling, processLine, classifySignSegment, transcript, CFG };
+// Replay a capture-page recording (capture.html, format stat-capture-v1) through the same
+// path as the camera: analyzeFrame -> line detection -> processLine. Used by
+// tools/eval_recordings.mjs to score real recordings. Debug mode only.
+const lineLog = [];
+async function replay(take, opts = {}) {
+  const prevMode = modeOverride, prevHand = dominantHand;
+  replaySize = { w: take.videoWidth || 640, h: take.videoHeight || 480 };
+  if (opts.mode) modeOverride = opts.mode;
+  if (take.dominantHand) dominantHand = take.dominantHand;
+  transcript.length = 0; lineLog.length = 0; line = null;
+  const t0 = performance.now() + 1e6; // a fresh time base, after anything the camera did
+  let last = 0, seen = 0;
+  try {
+    for (const fr of take.frames) {
+      const hands = fr.hands || [];
+      const handResult = {
+        landmarks: hands.map(h => h.landmarks.map(([x, y, z]) => ({ x, y, z }))),
+        handedness: hands.map(h => [{ categoryName: h.handedness, score: h.score }]),
+      };
+      let poseLm = null;
+      if (fr.pose) {
+        poseLm = new Array(33).fill(null);
+        (take.poseIndices || POSE_SUBSET_ORDER).forEach((idx, j) => {
+          const [x, y, z, visibility] = fr.pose[j]; poseLm[idx] = { x, y, z, visibility };
+        });
+      }
+      if (hands.length) seen++;
+      last = fr.t;
+      lineFrame(analyzeFrame(handResult, { landmarks: poseLm ? [poseLm] : [] }, t0 + fr.t));
+    }
+    // hands down after the take, long enough to end the line
+    for (let k = 1; k <= Math.ceil((CFG.lineEndMs + 200) / 66); k++) {
+      lineFrame(analyzeFrame({ landmarks: [], handedness: [] }, { landmarks: [] }, t0 + last + k * 66));
+    }
+    if (line) endLine();
+    for (let i = 0; i < 600 && (busyCount > 0 || line); i++) await new Promise(r => setTimeout(r, 50));
+    await processing;
+    return {
+      entries: transcript.map(e => ({ english: e.english, raw: e.raw, tokens: [...e.tokens], kind: e.kind })),
+      lines: lineLog.map(l => ({ ...l })),
+      handFrames: take.frames.length ? seen / take.frames.length : 0,
+    };
+  } finally {
+    replaySize = null; modeOverride = prevMode; dominantHand = prevHand;
+  }
+}
+if (DEBUG) window.__stat = { addLine, applyRules, inferWord, decodeSpelling, processLine, classifySignSegment, transcript, CFG, replay };
 </script>
 </body>
 </html>
