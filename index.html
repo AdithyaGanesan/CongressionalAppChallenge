@@ -772,7 +772,7 @@ function matchExpected(letterCandidates, expected, maxFrac) {
 // which word fits the whole hand motion. A word-frequency prior breaks near ties, and the letters
 // as read are kept when no dictionary word fits clearly better (names, rare terms).
 // Tuned on held-out signers with tools/fs_v2_word_test.mjs.
-const WW = { prior: 0.3, oov: 3.0, plausible: 0.02, lenSlack: 2, expectBonus: 6 };
+const WW = { prior: 0.8, oov: 12.0, plausible: 0.02, lenSlack: 2, expectBonus: 6 };
 const NEG = -1e30;
 function logAdd3(a, b, c) {
   const m = Math.max(a, b, c);
@@ -851,10 +851,14 @@ function scoreWord(data, C, span, chars, expected = []) {
 // word with the dictionary (frequency prior, penalty for non-words), so word boundaries are
 // chosen together with the words ("har desto" vs "hardest to"). Words with digits or symbols
 // (addresses, URLs) are left as read.
-const BEAM = { width: 12, minProb: 0.002, prior: 0.3, oov: 4.0 };
+const BEAM = { width: 12, minProb: 0.002, prior: 0.3, oov: 8.0, word: 0.0, symbol: 1.0 };
+// Every word costs something (log of its frequency relative to the most common word), so the
+// decoder gains nothing by splitting a word into several short ones.
+let maxFreqLog = null;
 function lineWordScore(w) {
-  if (!w || !/^[a-z]+$/.test(w)) return 0;
-  return dictionary && dictionary[w] ? BEAM.prior * Math.log(dictionary[w] + 1) : -BEAM.oov;
+  if (!w || !/^[a-z]+$/.test(w)) return -BEAM.symbol;
+  if (maxFreqLog === null && dictionary) maxFreqLog = Math.log(Math.max(...Object.values(dictionary)) + 1);
+  return dictionary && dictionary[w] ? BEAM.prior * (Math.log(dictionary[w] + 1) - maxFreqLog) - BEAM.word : -BEAM.oov;
 }
 function ctcBeamLine(data, S, C, chars) {
   const space = chars.indexOf(" ") + 1;

@@ -79,14 +79,23 @@ const tune = cases.filter((_, i) => i % 2 === 0), test = cases.filter((_, i) => 
 if (flag("grid")) {
   const good = tune.filter(c => c.present >= 0.6);
   console.log(`tuning half: ${good.length} sentences with the hand found in 60%+ of frames`);
-  for (const prior of [0.1, 0.2, 0.3, 0.45, 0.6]) for (const oov of [1, 3, 5, 8]) {
-    WW.prior = BEAM.prior = prior; WW.oov = BEAM.oov = oov;
-    const t0 = Date.now(), r = evaluate(good, false)["all clips"];
-    console.log(`prior ${prior} oov ${oov}: whole-word ${r.whole_word}, whole-line ${r.whole_line}, line+snap ${r.whole_line_then_snap} (raw ${r.raw_letters}) ${((Date.now() - t0) / r.words).toFixed(0)} ms/word`);
+  const which = args.includes("--line") ? "line" : "word";
+  if (which === "word") {
+    for (const prior of [0.6, 0.8, 1.0, 1.3, 1.7]) for (const oov of [5, 8, 12, 20]) {
+      WW.prior = prior; WW.oov = oov;
+      const t0 = Date.now(), r = evaluate(good, false)["all clips"];
+      console.log(`whole-word prior ${prior} oov ${oov}: ${r.whole_word} (raw ${r.raw_letters}) ${((Date.now() - t0) / r.words).toFixed(0)} ms/word`);
+    }
+  } else {
+    for (const prior of [0.2, 0.4, 0.7, 1.0]) for (const oov of [4, 8, 14]) for (const word of [0, 2]) {
+      BEAM.prior = prior; BEAM.oov = oov; BEAM.word = word;
+      const r = evaluate(good, false)["all clips"];
+      console.log(`whole-line prior ${prior} oov ${oov} word ${word}: ${r.whole_line}, line+snap ${r.whole_line_then_snap}`);
+    }
   }
 } else {
   WW.prior = num("prior", WW.prior); WW.oov = num("oov", WW.oov);
-  BEAM.prior = num("bprior", BEAM.prior); BEAM.oov = num("boov", BEAM.oov);
+  BEAM.prior = num("bprior", BEAM.prior); BEAM.oov = num("boov", BEAM.oov); BEAM.word = num("bword", BEAM.word);
   const t0 = Date.now(), res = evaluate(test, true);
   console.log(JSON.stringify({ test_signers, settings: WW, word_accuracy: res }, null, 1));
   console.log(`about ${((Date.now() - t0) / res["all clips"].words / 2).toFixed(0)} ms per word`);
