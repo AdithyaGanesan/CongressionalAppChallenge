@@ -253,6 +253,8 @@ def letters(s):
 
 def score(preds, refs):
     N = sum(len(r) for r in refs)
+    if N == 0:
+        return {"score": None, "cer": None, "n_phrases": 0, "n_chars": 0}
     D = sum(lev(p, r) for p, r in zip(preds, refs))
     return {"score": round((N - D) / N, 4), "cer": round(D / N, 4), "n_phrases": len(refs), "n_chars": N}
 
@@ -539,7 +541,7 @@ def cmd_lp(a):
     sp, test_s, _ = split_signers(pids)
     te = np.flatnonzero((sp == "test") & (np.array(LOADED_SRC) == "supp"))
     te = te[np.random.RandomState(5).permutation(len(te))[:a.limit or len(te)]]
-    sess = ort.InferenceSession(os.path.join(a.models, "stat_fingerspelling_v2.onnx"))
+    sess = ort.InferenceSession(os.path.join(a.models, f"stat_fingerspelling_{a.tag}.onnx"))
     run = lambda v: sess.run(None, {"landmarks": v[None].astype(np.float32)})[0][0]
     index, off = [], 0
     with open(a.cases + ".bin", "wb") as f:
@@ -560,10 +562,52 @@ def cmd_lp(a):
     print(len(index), "sentences ->", a.cases, "test signers", test_s)
 
 
+def cmd_compare(a):
+    """Score exported ONNX models (--tags v2,v3) on the same held-out clips, the way the app runs them:
+    frames at --test-fps, hand side unknown (half the clips mirrored), auto-mirror picks the reading."""
+    import onnxruntime as ort
+    seqs, phrases, pids = load_data(a.npz, a.csv)
+    sp, test_s, _ = split_signers(pids)
+    te = np.flatnonzero(sp == "test")
+    src = np.array(LOADED_SRC)[te]
+    present = np.array([(~np.isnan(seqs[i][:, 0])).mean() for i in te])
+    refs = [phrases[i] for i in te]
+    flip = np.random.RandomState(7).rand(len(te)) < 0.5
+    clips = []
+    for i, f in zip(te, flip):
+        x = to_app_frames(seqs[i], False).reshape(-1, 21, 3).copy()
+        if f: x[..., 0] = -x[..., 0]
+        clips.append(x.reshape(-1, 63))
+    rep = json.load(open(a.report)) if os.path.exists(a.report) else {}
+    for tag in a.tags.split(","):
+        sess = ort.InferenceSession(os.path.join(a.models, f"stat_fingerspelling_{tag}.onnx"))
+        run = lambda v: sess.run(None, {"landmarks": v[None].astype(np.float32)})[0][0]
+        preds = []
+        for x in clips:
+            if len(x) < 2:
+                preds.append(""); continue
+            m = x.reshape(-1, 21, 3).copy(); m[..., 0] = -m[..., 0]
+            lp, lp2 = run(x), run(m.reshape(-1, 63))
+            if (lp2.argmax(-1) != 0).sum() > (lp.argmax(-1) != 0).sum():
+                lp = lp2
+            preds.append(greedy(torch.from_numpy(lp))[0])
+        r = {"all": score(preds, refs)}
+        for k in ("train", "supp"):
+            sel = np.flatnonzero(src == k)
+            r[k] = score([preds[j] for j in sel], [refs[j] for j in sel])
+        for lo in (0.6, 0.9):
+            sel = np.flatnonzero(present >= lo)
+            r[f"hand_found_{int(lo * 100)}pct_plus"] = score([preds[j] for j in sel], [refs[j] for j in sel])
+        rep[f"{tag}@{a.test_fps:g}fps"] = r
+        print(tag, f"{a.test_fps:g} fps", json.dumps(r), flush=True)
+    rep["test_signers"] = test_s
+    json.dump(rep, open(a.report, "w"), indent=1)
+
+
 def cmd_export(a):
     model = load_model(a.work)
     w = Exported(model).eval()
-    path = os.path.join(a.out, "stat_fingerspelling_v2.onnx")
+    path = os.path.join(a.out, f"stat_fingerspelling_{a.tag}.onnx")
     torch.onnx.export(w, torch.randn(1, 40, 63), path, input_names=["landmarks"], output_names=["logprobs"],
                       dynamic_axes={"landmarks": {1: "T"}, "logprobs": {1: "S"}}, opset_version=17, dynamo=False)
     import onnxruntime as ort
@@ -573,14 +617,16 @@ def cmd_export(a):
         ref = w(x).detach().numpy(); got = s.run(None, {"landmarks": x.numpy()})[0]
         print(T, got.shape, "max abs diff", float(np.abs(ref - got).max()))
     json.dump({"chars": CHARS, "blank": 0, "fps": 15, "upsample": model.up,
-               "source": "STAT fingerspelling model v2 (training/train_fingerspell.py), trained on Google - American "
-                         "Sign Language Fingerspelling Recognition, Kaggle 2023, CC BY 4.0"}, open(os.path.join(a.out, "fingerspell_v2.json"), "w"))
+               "source": f"STAT fingerspelling model {a.tag} (training/train_fingerspell.py), trained on Google - American "
+                         "Sign Language Fingerspelling Recognition, Kaggle 2023, CC BY 4.0"}, open(os.path.join(a.out, f"fingerspell_{a.tag}.json"), "w"))
     print(path, os.path.getsize(path) / 1e6, "MB")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["train", "test", "export", "old", "cases", "words", "lp"])
+    ap.add_argument("cmd", choices=["train", "test", "export", "old", "cases", "words", "lp", "compare"])
+    ap.add_argument("--tag", default="v2", help="model version in file names (export, lp)")
+    ap.add_argument("--tags", default="v2", help="compare: model versions to score, e.g. v2,v3")
     ap.add_argument("--cases", default="fs_cases.json")
     ap.add_argument("--npz"); ap.add_argument("--csv"); ap.add_argument("--work", default="fs_work")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "models"))
@@ -597,4 +643,4 @@ if __name__ == "__main__":
     if a.fps_range:
         FPS_RANGE = tuple(float(v) for v in a.fps_range.split(","))
     TEST_FPS = a.test_fps
-    {"train": cmd_train, "test": cmd_test, "export": cmd_export, "old": cmd_old, "cases": cmd_cases, "words": cmd_words, "lp": cmd_lp}[a.cmd](a)
+    {"train": cmd_train, "test": cmd_test, "export": cmd_export, "old": cmd_old, "cases": cmd_cases, "words": cmd_words, "lp": cmd_lp, "compare": cmd_compare}[a.cmd](a)
