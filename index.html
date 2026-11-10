@@ -466,10 +466,13 @@ const SIGN_MODEL_VERSION = params.get("model") === "v2" ? "v2" : "v1";
 const SIGN_MODEL_PATH = SIGN_MODEL_VERSION === "v2" ? "models/stat_sign_model_v2.onnx" : "models/stat_sign_model.onnx";
 const SIGN_CLASSES_PATH = SIGN_MODEL_VERSION === "v2" ? "models/sign_classes_v2.json" : "models/sign_classes.json";
 const FINGERSPELL_MODEL_PATH = "models/stat_fingerspelling_model.onnx";
-// ?fs=v2 reads fingerspelling with a sequence model trained on Google's ASL Fingerspelling data
-// (100+ Deaf signers, training/train_fingerspell.py) instead of one photo-trained letter per frame
-const FS_VERSION = params.get("fs") === "v2" ? "v2" : "v1";
-const FS_V2_MODEL_PATH = "models/stat_fingerspelling_v2.onnx";
+// ?fs=v2 / ?fs=v3 read fingerspelling with a sequence model trained on Google's ASL Fingerspelling data
+// (100+ Deaf signers, training/train_fingerspell.py) instead of one photo-trained letter per frame.
+// v3 is larger, trained on all the data at 10-30 fps, and reads frames at up to 30 fps.
+const FS_VERSION = ["v2", "v3"].includes(params.get("fs")) ? params.get("fs") : "v1";
+const FS_SEQ = FS_VERSION !== "v1";
+const FS_V2_MODEL_PATH = `models/stat_fingerspelling_${FS_VERSION}.onnx`;
+const FS_SEQ_FPS = FS_VERSION === "v3" ? 30 : 15;
 let fsV2Session = null, fsV2Info = null;
 
 let signSession = null;
@@ -499,16 +502,16 @@ async function loadOnnxModels() {
   const fsLogits = fsResult.logits.data;
   console.log(`fingerspelling model: output shape OK, ${fsLogits.length} classes`);
 
-  if (FS_VERSION === "v2") {
+  if (FS_SEQ) {
     [fsV2Session, fsV2Info] = await Promise.all([
       ort.InferenceSession.create(FS_V2_MODEL_PATH, { executionProviders: ["wasm"] }),
-      fetch("models/fingerspell_v2.json").then(r => r.json()),
+      fetch(`models/fingerspell_${FS_VERSION}.json`).then(r => r.json()),
     ]);
     const r = await fsV2Session.run({ landmarks: new ort.Tensor("float32", new Float32Array(10 * 63), [1, 10, 63]) });
-    console.log(`fingerspelling model v2: output shape OK, ${r.logprobs.dims.join("x")}`);
+    console.log(`fingerspelling model ${FS_VERSION}: output shape OK, ${r.logprobs.dims.join("x")}`);
   }
 
-  onnxStatusEl.textContent = `ok (${signLogits.length}/${fsLogits.length}${FS_VERSION === "v2" ? "/v2" : ""})`;
+  onnxStatusEl.textContent = `ok (${signLogits.length}/${fsLogits.length}${FS_SEQ ? "/" + FS_VERSION : ""})`;
 }
 
 let facingMode = "user";
@@ -629,11 +632,11 @@ fetch("models/topic_diagrams.json").then(r => r.json()).then(j => { topics = j.t
 // notebook), i.e. 15 frames per second, and segmentClip was tuned on the same rate. Phones
 // run 20-30 fps, which made every sign look twice as slow, so signing frames are resampled.
 const SIGN_FPS = 15;
-function resampleTo15fps(frames) {
+function resampleTo15fps(frames, fps = SIGN_FPS) {
   const out = [];
   let last = -Infinity;
   for (const f of frames) {
-    if (f.t - last >= 1000 / SIGN_FPS - 5) { out.push(f); last = f.t; }
+    if (f.t - last >= 1000 / fps - 5) { out.push(f); last = f.t; }
   }
   return out;
 }
@@ -1046,7 +1049,7 @@ function spanFeatures(frames, probs, s, scale) {
 }
 // v2 does not use the old letter model's confidence: it was the part that failed for real signers
 const looksSpelled = (ft, nLetters) => ft.travel < CFG.spellMaxTravel && ft.oneHand >= CFG.spellMinOneHand &&
-  (FS_VERSION === "v2" || ft.letterConf >= CFG.spellMinConf) && nLetters >= CFG.spellMinLetters;
+  (FS_SEQ || ft.letterConf >= CFG.spellMinConf) && nLetters >= CFG.spellMinLetters;
 
 // A line is signs, fingerspelling, or signs followed by a fingerspelled word
 // (TODAY C-A-L-I-B-R-A-T-E). Find the earliest letter run from which the rest of
@@ -1059,7 +1062,7 @@ async function processLine(frames) {
   const runs = decodeSpelling(frames, probs, scale).runs;
 
   let split = -1, tail = null, spellStart = -1, v2 = null;
-  if (modeOverride === "auto" && FS_VERSION === "v2") {
+  if (modeOverride === "auto" && FS_SEQ) {
     // v2: same candidate start points, but the letter count comes from the sequence model
     const starts = runs.length ? runs.map(r => r.start) : [0];
     for (let i = 0; i < starts.length; i++) {
@@ -1077,7 +1080,7 @@ async function processLine(frames) {
   let signFrames = [], spellRuns = [];
   if (modeOverride === "spell") {
     spellStart = 0;
-    if (FS_VERSION === "v2") v2 = await spellV2(frames); else spellRuns = runs;
+    if (FS_SEQ) v2 = await spellV2(frames); else spellRuns = runs;
   } else if (modeOverride === "sign" || spellStart < 0) signFrames = frames;
   else {
     const s = spellStart;
@@ -1147,11 +1150,11 @@ async function processLine(frames) {
   addLine(entry);
 }
 
-// v2: the sequence model on the dominant hand at 15 fps (frames without the hand dropped, as in
+// v2/v3: the sequence model on the dominant hand at 15 fps (v3: up to 30 fps) (frames without the hand dropped, as in
 // training), on the clip and its mirror image (either hand can be dominant), keeping the one
 // that reads more characters. Greedy CTC decode; a space splits words.
 async function spellV2(frames) {
-  const hands = resampleTo15fps(frames).filter(f => f.domHand63).map(f => f.domHand63);
+  const hands = resampleTo15fps(frames, FS_SEQ_FPS).filter(f => f.domHand63).map(f => f.domHand63);
   if (hands.length < 2) return { words: [], text: "" };
   const flat = new Float32Array(hands.length * 63);
   hands.forEach((h, i) => flat.set(h, i * 63));
@@ -1205,7 +1208,7 @@ function ctcGreedy(lp) {
   return { words: words.filter(w => w.length), text, scored };
 }
 // for the headless browser test (tools/fs_v2_browser_test.mjs)
-if (FS_VERSION === "v2") window.statTest = {
+if (FS_SEQ) window.statTest = {
   decodeV2: async (arr, T) => (await decodeV2(new Float32Array(arr), T)).text,
   processLine, transcript: () => transcript, setMode: m => { modeOverride = m; },
 };
