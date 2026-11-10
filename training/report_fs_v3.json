@@ -1,0 +1,240 @@
+{
+ "what": "Fingerspelling v3 vs v2 on the same held-out signers (Kaggle asl-fingerspelling, CC BY 4.0), scored on the exported ONNX models the app runs",
+ "v3_training": "d=224, 4 stages, 40 epochs on all 121 Kaggle files, frame rates 10-30 fps (training/train_fingerspell.py; work dir not committed)",
+ "test_signers": [
+  4,
+  43,
+  53,
+  68,
+  99,
+  128,
+  157,
+  225,
+  233,
+  251
+ ],
+ "characters_1_minus_cer": {
+  "v2@15fps": {
+   "all": {
+    "score": 0.5136,
+    "cer": 0.4864,
+    "n_phrases": 10718,
+    "n_chars": 240787
+   },
+   "train": {
+    "score": 0.5095,
+    "cer": 0.4905,
+    "n_phrases": 6151,
+    "n_chars": 110352
+   },
+   "supp": {
+    "score": 0.5171,
+    "cer": 0.4829,
+    "n_phrases": 4567,
+    "n_chars": 130435
+   },
+   "hand_found_60pct_plus": {
+    "score": 0.865,
+    "cer": 0.135,
+    "n_phrases": 3277,
+    "n_chars": 70928
+   },
+   "hand_found_90pct_plus": {
+    "score": 0.9363,
+    "cer": 0.0637,
+    "n_phrases": 811,
+    "n_chars": 16538
+   }
+  },
+  "v3@15fps": {
+   "all": {
+    "score": 0.5301,
+    "cer": 0.4699,
+    "n_phrases": 10718,
+    "n_chars": 240787
+   },
+   "train": {
+    "score": 0.5178,
+    "cer": 0.4822,
+    "n_phrases": 6151,
+    "n_chars": 110352
+   },
+   "supp": {
+    "score": 0.5406,
+    "cer": 0.4594,
+    "n_phrases": 4567,
+    "n_chars": 130435
+   },
+   "hand_found_60pct_plus": {
+    "score": 0.8871,
+    "cer": 0.1129,
+    "n_phrases": 3277,
+    "n_chars": 70928
+   },
+   "hand_found_90pct_plus": {
+    "score": 0.9486,
+    "cer": 0.0514,
+    "n_phrases": 811,
+    "n_chars": 16538
+   }
+  },
+  "v2@30fps": {
+   "all": {
+    "score": 0.5532,
+    "cer": 0.4468,
+    "n_phrases": 10718,
+    "n_chars": 240787
+   },
+   "train": {
+    "score": 0.5429,
+    "cer": 0.4571,
+    "n_phrases": 6151,
+    "n_chars": 110352
+   },
+   "supp": {
+    "score": 0.562,
+    "cer": 0.438,
+    "n_phrases": 4567,
+    "n_chars": 130435
+   },
+   "hand_found_60pct_plus": {
+    "score": 0.8605,
+    "cer": 0.1395,
+    "n_phrases": 3277,
+    "n_chars": 70928
+   },
+   "hand_found_90pct_plus": {
+    "score": 0.9141,
+    "cer": 0.0859,
+    "n_phrases": 811,
+    "n_chars": 16538
+   }
+  },
+  "v3@30fps": {
+   "all": {
+    "score": 0.5866,
+    "cer": 0.4134,
+    "n_phrases": 10718,
+    "n_chars": 240787
+   },
+   "train": {
+    "score": 0.5626,
+    "cer": 0.4374,
+    "n_phrases": 6151,
+    "n_chars": 110352
+   },
+   "supp": {
+    "score": 0.6068,
+    "cer": 0.3932,
+    "n_phrases": 4567,
+    "n_chars": 130435
+   },
+   "hand_found_60pct_plus": {
+    "score": 0.9,
+    "cer": 0.1,
+    "n_phrases": 3277,
+    "n_chars": 70928
+   },
+   "hand_found_90pct_plus": {
+    "score": 0.9429,
+    "cer": 0.0571,
+    "n_phrases": 811,
+    "n_chars": 16538
+   }
+  }
+ },
+ "words_500_english_sentences": {
+  "v2@15fps": {
+   "all clips": {
+    "sentences": 500,
+    "words": 2700,
+    "raw_letters": 0.248,
+    "top3_then_dictionary": 0.305,
+    "whole_word": 0.337,
+    "whole_line": 0.26,
+    "whole_line_then_snap": 0.267
+   },
+   "hand found in 60%+ of frames": {
+    "sentences": 134,
+    "words": 713,
+    "raw_letters": 0.597,
+    "top3_then_dictionary": 0.694,
+    "whole_word": 0.71,
+    "whole_line": 0.656,
+    "whole_line_then_snap": 0.666
+   },
+   "hand found in 90%+ of frames": {
+    "sentences": 34,
+    "words": 171,
+    "raw_letters": 0.696,
+    "top3_then_dictionary": 0.784,
+    "whole_word": 0.784,
+    "whole_line": 0.801,
+    "whole_line_then_snap": 0.819
+   }
+  },
+  "v3@15fps": {
+   "all clips": {
+    "sentences": 500,
+    "words": 2700,
+    "raw_letters": 0.291,
+    "top3_then_dictionary": 0.345,
+    "whole_word": 0.384,
+    "whole_line": 0.337,
+    "whole_line_then_snap": 0.345
+   },
+   "hand found in 60%+ of frames": {
+    "sentences": 134,
+    "words": 713,
+    "raw_letters": 0.697,
+    "top3_then_dictionary": 0.77,
+    "whole_word": 0.802,
+    "whole_line": 0.785,
+    "whole_line_then_snap": 0.795
+   },
+   "hand found in 90%+ of frames": {
+    "sentences": 34,
+    "words": 171,
+    "raw_letters": 0.801,
+    "top3_then_dictionary": 0.848,
+    "whole_word": 0.871,
+    "whole_line": 0.871,
+    "whole_line_then_snap": 0.877
+   }
+  },
+  "v3@30fps": {
+   "all clips": {
+    "sentences": 500,
+    "words": 2707,
+    "raw_letters": 0.379,
+    "top3_then_dictionary": 0.441,
+    "whole_word": 0.473,
+    "whole_line": 0.42,
+    "whole_line_then_snap": 0.431
+   },
+   "hand found in 60%+ of frames": {
+    "sentences": 149,
+    "words": 808,
+    "raw_letters": 0.757,
+    "top3_then_dictionary": 0.829,
+    "whole_word": 0.849,
+    "whole_line": 0.851,
+    "whole_line_then_snap": 0.863
+   },
+   "hand found in 90%+ of frames": {
+    "sentences": 27,
+    "words": 148,
+    "raw_letters": 0.878,
+    "top3_then_dictionary": 0.905,
+    "whole_word": 0.919,
+    "whole_line": 0.932,
+    "whole_line_then_snap": 0.932
+   }
+  }
+ },
+ "notes": [
+  "score = 1 - character error rate over full phrases; hand side unknown, auto-mirror as in the app",
+  "word tests use tools/fs_v2_word_test.mjs (test half of the first 1000 held-out sentences); whole_word is what the app uses",
+  "the 30 fps word sample differs by a few sentences from the 15 fps ones (clips too short at one rate are skipped)"
+ ]
+}
