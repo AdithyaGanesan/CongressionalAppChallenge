@@ -252,6 +252,10 @@ const CFG = {
   // cutting signing into signs (segmentClip): minimum piece length, smoothing and spacing of
   // motion dips, in 15 fps frames. segMin=0 classifies each line as one sign (no cutting).
   segMin: numParam("segMin", 3), segSmooth: numParam("segSmooth", 3), segDist: numParam("segDist", 3),
+  // segModel=1: let the sign model choose the cuts. Candidate cuts are motion dips; among all ways
+  // of cutting the line at them, keep the one whose pieces the model reads most confidently
+  // (sum of log top-1 probability, minus segPenalty per extra sign). Pieces are segMinLen-64 frames.
+  segModel: numParam("segModel", 0), segPenalty: numParam("segPenalty", 1.0), segMinLen: numParam("segMinLen", 8),
   // 1 = merge the same sign repeated in a row and drop unknown "?" pieces between signs
   mergeRepeats: numParam("mergeRepeats", 0),
   // fingerspelling v2: 1 = score whole dictionary words against the model, 0 = repair its top-3 letters
@@ -392,6 +396,17 @@ function frameMotion(prevVec, vec) {
 // min_segment_len=3, smoothing=3, valley_distance=3
 function segmentClip(frames, minSegmentLen = 3, smoothingWindow = 3, minValleyDistance = 3) {
   if (frames.length < 2) return [frames];
+  const boundaries = [0, ...motionValleys(frames, smoothingWindow, minValleyDistance), frames.length];
+  const segments = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const start = boundaries[i], end = boundaries[i+1];
+    if (end - start >= minSegmentLen) segments.push(frames.slice(start, end));
+  }
+  return segments.length ? segments : [frames];
+}
+// frame indices where smoothed hand/arm motion dips, at least minValleyDistance apart
+function motionValleys(frames, smoothingWindow = 3, minValleyDistance = 3) {
+  if (frames.length < 3) return [];
   const motion = [];
   for (let i = 1; i < frames.length; i++) motion.push(frameMotion(frames[i-1], frames[i]));
 
@@ -414,14 +429,7 @@ function segmentClip(frames, minSegmentLen = 3, smoothingWindow = 3, minValleyDi
       lastValley = i;
     }
   }
-
-  const boundaries = [0, ...valleys, frames.length];
-  const segments = [];
-  for (let i = 0; i < boundaries.length - 1; i++) {
-    const start = boundaries[i], end = boundaries[i+1];
-    if (end - start >= minSegmentLen) segments.push(frames.slice(start, end));
-  }
-  return segments.length ? segments : [frames];
+  return valleys; // same cut positions segmentClip has always used
 }
 
 // Aspect-ratio correction. MediaPipe x/y are fractions of the frame width/height,
@@ -646,6 +654,35 @@ function centerCrop(seg) {
   if (SIGN_MODEL_VERSION !== "v2" || seg.length <= MAX_SEGMENT_FRAMES) return seg;
   const s = Math.floor((seg.length - MAX_SEGMENT_FRAMES) / 2);
   return seg.slice(s, s + MAX_SEGMENT_FRAMES);
+}
+
+// Model-guided cutting (CFG.segModel): dynamic programming over candidate cut points.
+// best[j] = best score for frames 0..cut j; a piece i..j scores log p(top sign) - segPenalty.
+async function modelSegments(frames) {
+  const n = frames.length;
+  const pts = [0, ...motionValleys(frames, 3, 3).filter(v => v > 0 && v < n), n];
+  const best = new Array(pts.length).fill(-Infinity), back = new Array(pts.length).fill(-1), tops = {};
+  best[0] = 0;
+  const minLen = Math.min(CFG.segMinLen, n);
+  for (let j = 1; j < pts.length; j++) {
+    for (let i = j - 1; i >= 0; i--) {
+      const len = pts[j] - pts[i];
+      if (len > 64 && i < j - 1) break;            // pieces longer than the model's window
+      if (len < minLen && !(i === 0 && j === pts.length - 1)) continue;
+      if (best[i] === -Infinity) continue;
+      const top = await classifySignSegment(frames.slice(pts[i], pts[j]));
+      const sc = best[i] + Math.log(top[0][1] + 1e-9) - CFG.segPenalty;
+      if (sc > best[j]) { best[j] = sc; back[j] = i; tops[`${i},${j}`] = top; }
+    }
+  }
+  if (best[pts.length - 1] === -Infinity) return [frames];
+  const out = [];
+  for (let j = pts.length - 1; j > 0; j = back[j]) {
+    const i = back[j], seg = frames.slice(pts[i], pts[j]);
+    seg.top = tops[`${i},${j}`];
+    out.unshift(seg);
+  }
+  return out;
 }
 
 async function classifySignSegment(segmentFrames, k = 5) {
@@ -1097,9 +1134,10 @@ async function processLine(frames) {
   let signTokens = [];
   if (signFrames.length >= 3) {
     const vecs = resampleTo15fps(signFrames).map(f => f.rawVec);
-    const segs = CFG.segMin > 0 ? segmentClip(vecs, CFG.segMin, CFG.segSmooth, CFG.segDist) : [vecs];
+    const segs = CFG.segModel ? await modelSegments(vecs)
+      : CFG.segMin > 0 ? segmentClip(vecs, CFG.segMin, CFG.segSmooth, CFG.segDist) : [vecs];
     for (const seg of segs) {
-      const top = await classifySignSegment(seg);
+      const top = seg.top || await classifySignSegment(seg);
       details.push(`seg ×${seg.length}: ` + top.slice(0, 3).map(([w, p]) => `${w} ${(p * 100).toFixed(0)}%`).join(", "));
       signTokens.push(top[0][1] >= CFG.signConfMin ? top[0][0] : "?"); // "?" = a sign the model doesn't know well
     }

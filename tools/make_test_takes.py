@@ -49,6 +49,10 @@ def main():
     ap.add_argument("--signers", default="P15,P17,P18"); ap.add_argument("--signs", type=int, default=60)
     ap.add_argument("--phrases", type=int, default=20); ap.add_argument("--words", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--continuous", action="store_true", help="phrases without hands-down rests: each clip trimmed "
+                    "to its frames with a hand visible, joined by a short blend, as in continuous signing")
+    ap.add_argument("--skip", type=int, default=0, help="skip this many shuffled clips (e.g. to build a tuning set "
+                    "that doesn't overlap the default test set: --skip 300)")
     a = ap.parse_args()
     random.seed(a.seed)
     known = set(json.load(open(a.classes)))
@@ -60,6 +64,7 @@ def main():
             w, h = (int(d["width"]), int(d["height"])) if "width" in d.files else (640, 480)
             clips.append((str(d["gloss"]), d["landmarks"], w, h))
     random.shuffle(clips)
+    clips = clips[a.skip:]
     os.makedirs(a.out, exist_ok=True)
     n = 0
     for gloss, lm, w, h in clips[:a.signs]:
@@ -72,7 +77,23 @@ def main():
         if len(parts) < a.words:
             break
         frames, t = [], 0.0
-        for gloss, lm, w, h in parts:
+        if a.continuous:
+            seq = []
+            for gloss, lm, w, h in parts:
+                hand = np.flatnonzero(np.abs(lm[:, :126]).sum(1) > 0)
+                if len(hand):
+                    lm = lm[hand[0]:hand[-1] + 1]
+                if seq:  # 4 blended frames from the end of one sign to the start of the next
+                    a0, b0 = seq[-1], lm[0]
+                    for k in range(1, 5):
+                        f = k / 5
+                        mix = np.where((np.abs(a0) > 0) & (np.abs(b0) > 0), (1 - f) * a0 + f * b0, b0 if f >= .5 else a0)
+                        seq.append(mix.astype(np.float32))
+                seq += list(lm)
+            frames = frames_from_clip(np.stack(seq), 0)
+            frames += rest_frames(frames[-1]["pose"], frames[-1]["t"] + FRAME_MS, 15)
+        else:
+          for gloss, lm, w, h in parts:
             fr = frames_from_clip(lm, t)
             frames += fr
             t = fr[-1]["t"] + FRAME_MS
