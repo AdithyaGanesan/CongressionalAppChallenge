@@ -232,7 +232,7 @@ function numParam(name, def) {
 }
 const CFG = {
   // a line ends when no hand has been in the signing area for this long
-  lineEndMs: numParam("lineEndMs", 700),
+  lineEndMs: numParam("lineEndMs", 1100),
   // fingerspelling stays in a small area: dominant-wrist spread / shoulder width
   spellMaxTravel: numParam("spellMaxTravel", 0.5),
   // share of hands-up frames with only one hand up
@@ -244,23 +244,23 @@ const CFG = {
   // a letter = the same smoothed letter for at least this many frames
   letterMinFrames: numParam("letterMinFrames", 6),
   // sign segments below this confidence show as "?"
-  signConfMin: numParam("signConfMin", 0.40),
+  signConfMin: numParam("signConfMin", 0.20),
   // signing area: wrist above shoulder-line + signArea × (hip-line − shoulder-line)
   signArea: numParam("signArea", 0.9),
   // a sign before a fingerspelled word must last this long (shorter = the hand rising into place)
   signPrefixMs: numParam("signPrefixMs", 450),
   // cutting signing into signs (segmentClip): minimum piece length, smoothing and spacing of
   // motion dips, in 15 fps frames. segMin=0 classifies each line as one sign (no cutting).
-  segMin: numParam("segMin", 3), segSmooth: numParam("segSmooth", 3), segDist: numParam("segDist", 3),
+  segMin: numParam("segMin", 0), segSmooth: numParam("segSmooth", 3), segDist: numParam("segDist", 3),
   // segModel=1: let the sign model choose the cuts. Candidate cuts are motion dips; among all ways
   // of cutting the line at them, keep the one whose pieces the model reads most confidently
   // (sum of log top-1 probability, minus segPenalty per extra sign). Pieces are segMinLen-64 frames.
   // a stretch that looks fingerspelled stays a sign when the sign model reads it as one sign
   // at least this confidently (1 = never); stops one-handed signs turning into stray letters
-  signOverSpell: numParam("signOverSpell", 1),
+  signOverSpell: numParam("signOverSpell", 0.3),
   // ...but only when the fingerspelling read is this many letters or fewer (stray letters, not words)
   signOverSpellLetters: numParam("signOverSpellLetters", 3),
-  segModel: numParam("segModel", 0), segPenalty: numParam("segPenalty", 1.0), segMinLen: numParam("segMinLen", 8),
+  segModel: numParam("segModel", 1), segPenalty: numParam("segPenalty", 0), segMinLen: numParam("segMinLen", 6),
   // 1 = merge the same sign repeated in a row and drop unknown "?" pieces between signs
   mergeRepeats: numParam("mergeRepeats", 0),
   // fingerspelling v2: 1 = score whole dictionary words against the model, 0 = repair its top-3 letters
