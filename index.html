@@ -258,6 +258,8 @@ const CFG = {
   // a stretch that looks fingerspelled stays a sign when the sign model reads it as one sign
   // at least this confidently (1 = never); stops one-handed signs turning into stray letters
   signOverSpell: numParam("signOverSpell", 1),
+  // ...but only when the fingerspelling read is this many letters or fewer (stray letters, not words)
+  signOverSpellLetters: numParam("signOverSpellLetters", 3),
   segModel: numParam("segModel", 0), segPenalty: numParam("segPenalty", 1.0), segMinLen: numParam("segMinLen", 8),
   // 1 = merge the same sign repeated in a row and drop unknown "?" pieces between signs
   mergeRepeats: numParam("mergeRepeats", 0),
@@ -1111,7 +1113,7 @@ async function processLine(frames) {
       if (!looksSpelled(ft, Infinity)) continue;
       const dec = await spellV2(frames.slice(starts[i]));
       if (!looksSpelled(ft, dec.words.flat().length)) continue;
-      if (CFG.signOverSpell < 1) {
+      if (CFG.signOverSpell < 1 && dec.text.replace(/[^a-z]/gi, "").length <= CFG.signOverSpellLetters) {
         const span = resampleTo15fps(frames.slice(starts[i])).map(f => f.rawVec);
         const top = span.length >= 3 ? await classifySignSegment(span) : null;
         if (top && top[0][1] >= CFG.signOverSpell) {
