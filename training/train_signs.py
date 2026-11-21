@@ -14,7 +14,7 @@ Splits (by signer, so test signers are never seen in training):
 
 Usage: python train_signs.py --data DIR --out DIR [--arch convtx|bilstm] [--epochs 40] [--glosses a.txt b.txt]
 """
-import argparse, glob, json, math, os, random, time
+import argparse, glob, json, math, os, random, re, time
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
@@ -81,14 +81,22 @@ def crop(a, train):
     return a[s:s + MAX_LEN]
 
 # ---------------- data ----------------
+def merge_variant(g):
+    """ASL Citizen numbers sign variants (BABY1, BABY2); they mean the same English word, so merge them."""
+    return re.sub(r"(?<=[A-Z])\d+$", "", g)
+
 def load(data_dir, keep_glosses=None):
-    recs = []
+    recs, seen = [], set()
     for p in sorted(glob.glob(f"{data_dir}/*.npz")):
         if ".tmp" in p:
             continue
+        video = os.path.basename(p).split("__")[-1]  # same video can appear under two gloss spellings
+        if video in seen:
+            continue
+        seen.add(video)
         try:
             d = np.load(p)
-            g = str(d["gloss"])
+            g = merge_variant(str(d["gloss"]))
             if keep_glosses is not None and g not in keep_glosses:
                 continue
             lm = d["landmarks"].astype(np.float32)

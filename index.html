@@ -475,9 +475,10 @@ let handLandmarker, poseLandmarker;
 
 // ---- ONNX model setup ----
 // ?model=v2 loads the retrained sign model (more signs, more signers) for side-by-side testing
-const SIGN_MODEL_VERSION = params.get("model") === "v2" ? "v2" : "v1";
-const SIGN_MODEL_PATH = SIGN_MODEL_VERSION === "v2" ? "models/stat_sign_model_v2.onnx" : "models/stat_sign_model.onnx";
-const SIGN_CLASSES_PATH = SIGN_MODEL_VERSION === "v2" ? "models/sign_classes_v2.json" : "models/sign_classes.json";
+const SIGN_MODEL_VERSION = ["v2", "v3"].includes(params.get("model")) ? params.get("model") : "v1";
+const SIGN_SEQ = SIGN_MODEL_VERSION !== "v1"; // v2 and v3: whole-clip models trained on ASL Citizen
+const SIGN_MODEL_PATH = SIGN_SEQ ? `models/stat_sign_model_${SIGN_MODEL_VERSION}.onnx` : "models/stat_sign_model.onnx";
+const SIGN_CLASSES_PATH = SIGN_SEQ ? `models/sign_classes_${SIGN_MODEL_VERSION}.json` : "models/sign_classes.json";
 const FINGERSPELL_MODEL_PATH = "models/stat_fingerspelling_model.onnx";
 // ?fs=v2 / ?fs=v3 read fingerspelling with a sequence model trained on Google's ASL Fingerspelling data
 // (100+ Deaf signers, training/train_fingerspell.py) instead of one photo-trained letter per frame.
@@ -656,7 +657,7 @@ function resampleTo15fps(frames, fps = SIGN_FPS) {
 // v2 was trained on clips of at most 64 frames (center crop at test time); do the same
 const MAX_SEGMENT_FRAMES = 64;
 function centerCrop(seg) {
-  if (SIGN_MODEL_VERSION !== "v2" || seg.length <= MAX_SEGMENT_FRAMES) return seg;
+  if (!SIGN_SEQ || seg.length <= MAX_SEGMENT_FRAMES) return seg;
   const s = Math.floor((seg.length - MAX_SEGMENT_FRAMES) / 2);
   return seg.slice(s, s + MAX_SEGMENT_FRAMES);
 }
