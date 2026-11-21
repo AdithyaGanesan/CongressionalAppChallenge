@@ -69,7 +69,7 @@ def extract(path):
 
 
 def out_name(r):
-    return os.path.join(OUT, f"{r['split']}__{r['gloss']}__{os.path.splitext(r['video'])[0]}.npz")
+    return os.path.join(OUT, f"{r['split']}__{r['gloss'].replace('/', '_')}__{os.path.splitext(r['video'])[0]}.npz")
 
 
 def work(r):
