@@ -1,0 +1,30 @@
+{
+ "arch": "convtx",
+ "classes": 2301,
+ "train_clips": 64091,
+ "val_clips": 10304,
+ "test_clips": 8998,
+ "holdout_signers": [
+  "P15",
+  "P17",
+  "P18"
+ ],
+ "val_top1": 0.8032802795031055,
+ "test_top1": 0.7121582573905312,
+ "test_top5": 0.898088464103134,
+ "old_model_on_its_signs": {
+  "clips": 3896,
+  "old_top1": 0.7679671457905544,
+  "new_top1_same_clips": 0.7114989733059548
+ },
+ "onnx_mb": 6.269002,
+ "onnx_max_diff": 3.337860107421875e-06,
+ "same_clips_limited_to_v2_signs": {
+  "clips": 3896,
+  "v2_top1": 0.767,
+  "v2_top5": 0.922,
+  "v3_top1": 0.788,
+  "v3_top5": 0.932,
+  "note": "v3's scores with its choices limited to v2's 1,017 signs (app option ?vocab=v2)"
+ }
+}

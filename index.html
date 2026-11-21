@@ -623,6 +623,9 @@ function drawConnections(points, connections, color) {
 // ---- class label lists — must match the order from gloss_to_idx / idx_to_gloss_fs
 // in training. Loaded from JSON so this file doesn't need hardcoded label arrays.
 let signClasses = null;
+// ?vocab=v2 limits a bigger sign model to an older, smaller sign list (fewer look-alike signs to confuse)
+const SIGN_VOCAB = ["v2"].includes(params.get("vocab")) ? params.get("vocab") : null;
+let signVocabMask = null;
 let fingerspellClasses = null;
 let letterIdx = null; // indexes of the 26 real letters (drops Kaggle's "del"/"space", which aren't ASL)
 Promise.all([
@@ -630,6 +633,8 @@ Promise.all([
   fetch("models/fingerspell_classes.json").then(r => r.json()),
 ]).then(([s, f]) => {
   signClasses = s;
+  if (SIGN_VOCAB) fetch(`models/sign_classes_${SIGN_VOCAB}.json`).then(r => r.json())
+    .then(v => { const keep = new Set(v); signVocabMask = s.map(g => keep.has(g)); });
   fingerspellClasses = f;
   letterIdx = f.map((c, i) => [c, i]).filter(([c]) => /^[A-Z]$/.test(c)).map(([, i]) => i);
 }).catch(() => console.log("class label files not found — add models/sign_classes.json and models/fingerspell_classes.json"));
@@ -698,7 +703,8 @@ async function classifySignSegment(segmentFrames, k = 5) {
   segmentFrames.forEach((f, i) => flat.set(normalizeFrame(f), i * 150));
   const input = new ort.Tensor("float32", flat, [1, T, 150]);
   const result = await signSession.run({ landmarks: input });
-  const logits = result.logits.data;
+  let logits = result.logits.data;
+  if (signVocabMask) logits = Array.from(logits, (x, i) => signVocabMask[i] ? x : -Infinity);
   return topK(logits, signClasses, k);
 }
 

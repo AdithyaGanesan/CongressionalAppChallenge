@@ -3,6 +3,34 @@
 The video shows the version on `main` (submitted before Oct 26, 2026). Everything below was built
 afterwards on the `next` branch. Numbers are measured on signers the models never saw in training.
 
+## 2026-11-22: sign model v3 (`?model=v3`)
+
+- Extracted hand and body landmarks from all of ASL Citizen (83,393 videos, up from ~36,000) and trained
+  the same kind of model on it. Numbered variants of a sign (BABY1, BABY2) are merged, as in v2.
+  v3 knows **2,301 signs** (v2: 1,017).
+- Held-out signers (P15, P17, P18), clips of v2's 1,017 signs:
+
+  | model | top-1 | top-5 |
+  |---|---|---|
+  | v2 | 76.7% | 92.2% |
+  | v3, choosing among all 2,301 signs | 71.1% | 90.3% |
+  | v3, limited to v2's 1,017 signs (`&vocab=v2`) | 78.8% | 93.2% |
+
+  More data made the model better; the extra signs cost accuracy because many look alike
+  (CUT / SCISSORS, RAT / HAMSTER). Over all 2,301 signs v3 gets 71.2% top-1, 89.8% top-5.
+- Replayed through the app (same test recordings as above, `fs=v3`; note these recordings only use
+  v2's signs, and `vocab=v2` was chosen after seeing v3's first app result on them):
+
+  | test | v2 | v3 | v3 + `vocab=v2` |
+  |---|---|---|---|
+  | single signs, exactly right | 70% | 57% | 70% |
+  | phrases with pauses, all signs found | 63% | 55% | 64% |
+  | continuous phrases, signs found | 48% | 43% | 53% |
+  | fingerspelled sentences, words found | 50% | 50% | 50% |
+
+- Best settings so far: `?model=v3&vocab=v2&fs=v3`. Plain `?model=v3` recognizes more signs, less reliably.
+  Full numbers: `training/report_v3.json`.
+
 ## 2026-11-21: whole-sign recognition in the app
 
 - Found the main problem: the sign model alone gets ~79% of single signs right, but the app cut one sign
