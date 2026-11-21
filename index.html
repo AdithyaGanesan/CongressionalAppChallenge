@@ -255,6 +255,9 @@ const CFG = {
   // segModel=1: let the sign model choose the cuts. Candidate cuts are motion dips; among all ways
   // of cutting the line at them, keep the one whose pieces the model reads most confidently
   // (sum of log top-1 probability, minus segPenalty per extra sign). Pieces are segMinLen-64 frames.
+  // a stretch that looks fingerspelled stays a sign when the sign model reads it as one sign
+  // at least this confidently (1 = never); stops one-handed signs turning into stray letters
+  signOverSpell: numParam("signOverSpell", 1),
   segModel: numParam("segModel", 0), segPenalty: numParam("segPenalty", 1.0), segMinLen: numParam("segMinLen", 8),
   // 1 = merge the same sign repeated in a row and drop unknown "?" pieces between signs
   mergeRepeats: numParam("mergeRepeats", 0),
@@ -1099,6 +1102,7 @@ async function processLine(frames) {
   const runs = decodeSpelling(frames, probs, scale).runs;
 
   let split = -1, tail = null, spellStart = -1, v2 = null;
+  const lineDebugNotes = [];
   if (modeOverride === "auto" && FS_SEQ) {
     // v2: same candidate start points, but the letter count comes from the sequence model
     const starts = runs.length ? runs.map(r => r.start) : [0];
@@ -1106,7 +1110,16 @@ async function processLine(frames) {
       const ft = spanFeatures(frames, probs, starts[i], scale);
       if (!looksSpelled(ft, Infinity)) continue;
       const dec = await spellV2(frames.slice(starts[i]));
-      if (looksSpelled(ft, dec.words.flat().length)) { spellStart = starts[i]; tail = ft; v2 = dec; break; }
+      if (!looksSpelled(ft, dec.words.flat().length)) continue;
+      if (CFG.signOverSpell < 1) {
+        const span = resampleTo15fps(frames.slice(starts[i])).map(f => f.rawVec);
+        const top = span.length >= 3 ? await classifySignSegment(span) : null;
+        if (top && top[0][1] >= CFG.signOverSpell) {
+          if (DEBUG) lineDebugNotes.push(`reads as the sign ${top[0][0]} ${(top[0][1] * 100).toFixed(0)}%, not "${dec.text}"`);
+          continue;
+        }
+      }
+      spellStart = starts[i]; tail = ft; v2 = dec; break;
     }
   } else if (modeOverride === "auto") {
     for (let i = 0; i < runs.length; i++) {
@@ -1130,7 +1143,7 @@ async function processLine(frames) {
     : v2 ? v2.words.map(cands => ({ cands, letters: cands.map(c => c[0][0]) }))
     : spellRuns.length ? [{ cands: spellRuns.map(r => r.top3), letters: spellRuns.map(r => r.letter) }] : [];
 
-  const details = [];
+  const details = [...lineDebugNotes];
   let signTokens = [];
   if (signFrames.length >= 3) {
     const vecs = resampleTo15fps(signFrames).map(f => f.rawVec);
