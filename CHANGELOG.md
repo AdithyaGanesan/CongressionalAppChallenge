@@ -3,6 +3,12 @@
 The video shows the version on `main` (submitted before Oct 26, 2026). Everything below was built
 afterwards on the `next` branch. Numbers are measured on signers the models never saw in training.
 
+## 2026-11-24: best models are now the default
+
+- The app now uses sign model v3 (limited to v2's 1,017 signs) and fingerspelling v3 with no URL settings.
+  Older versions: `?model=v1` / `?model=v2`, `?fs=v1` / `?fs=v2`; all 2,301 signs: `?vocab=all`.
+- Checked by replaying the test recordings with no settings: same results as `?model=v3&vocab=v2&fs=v3`.
+
 ## 2026-11-22: sign model v3 (`?model=v3`)
 
 - Extracted hand and body landmarks from all of ASL Citizen (83,393 videos, up from ~36,000) and trained

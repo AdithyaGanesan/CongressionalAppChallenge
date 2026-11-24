@@ -7,7 +7,7 @@
 //   node tools/eval_recordings.mjs TAKES [--params "model=v2&fs=v2"] [--out report] [--cdn DIR]
 //
 // TAKES: a capture zip, or a folder of take .json files.
-// --params: app URL settings (default "model=v2&fs=v2"); debug=1 is always added.
+// --params: app URL settings (default: none, the app's own defaults); debug=1 is always added.
 // --out:    writes OUT.json and OUT.md (default: eval_report in the current folder).
 // --cdn:    a node_modules folder holding onnxruntime-web@1.19.2, @mediapipe/tasks-vision@0.10.14
 //           and mermaid@10.9.1, served in place of jsDelivr (only for networks that block it).
@@ -23,7 +23,7 @@ const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : def; };
 const src = args.find(a => !a.startsWith("--") && args[args.indexOf(a) - 1]?.startsWith("--") !== true);
 if (!src) { console.error("usage: node tools/eval_recordings.mjs TAKES [--params ...] [--out ...] [--cdn DIR]"); process.exit(1); }
-const appParams = opt("params", "model=v2&fs=v2");
+const appParams = opt("params", "");
 const outBase = opt("out", "eval_report");
 const cdnDir = opt("cdn", null);
 

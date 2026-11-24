@@ -474,16 +474,16 @@ function aspectFactor(trainAspect) {
 let handLandmarker, poseLandmarker;
 
 // ---- ONNX model setup ----
-// ?model=v2 loads the retrained sign model (more signs, more signers) for side-by-side testing
-const SIGN_MODEL_VERSION = ["v2", "v3"].includes(params.get("model")) ? params.get("model") : "v1";
+// Sign model: v3 by default (all of ASL Citizen); ?model=v2 or ?model=v1 load the older ones for comparison
+const SIGN_MODEL_VERSION = ["v1", "v2", "v3"].includes(params.get("model")) ? params.get("model") : "v3";
 const SIGN_SEQ = SIGN_MODEL_VERSION !== "v1"; // v2 and v3: whole-clip models trained on ASL Citizen
 const SIGN_MODEL_PATH = SIGN_SEQ ? `models/stat_sign_model_${SIGN_MODEL_VERSION}.onnx` : "models/stat_sign_model.onnx";
 const SIGN_CLASSES_PATH = SIGN_SEQ ? `models/sign_classes_${SIGN_MODEL_VERSION}.json` : "models/sign_classes.json";
 const FINGERSPELL_MODEL_PATH = "models/stat_fingerspelling_model.onnx";
-// ?fs=v2 / ?fs=v3 read fingerspelling with a sequence model trained on Google's ASL Fingerspelling data
+// Fingerspelling: v3 by default (?fs=v2, ?fs=v1 for older ones); v2/v3 read it with a sequence model trained on Google's ASL Fingerspelling data
 // (100+ Deaf signers, training/train_fingerspell.py) instead of one photo-trained letter per frame.
 // v3 is larger, trained on all the data at 10-30 fps, and reads frames at up to 30 fps.
-const FS_VERSION = ["v2", "v3"].includes(params.get("fs")) ? params.get("fs") : "v1";
+const FS_VERSION = ["v1", "v2", "v3"].includes(params.get("fs")) ? params.get("fs") : "v3";
 const FS_SEQ = FS_VERSION !== "v1";
 const FS_V2_MODEL_PATH = `models/stat_fingerspelling_${FS_VERSION}.onnx`;
 const FS_SEQ_FPS = FS_VERSION === "v3" ? 30 : 15;
@@ -623,8 +623,9 @@ function drawConnections(points, connections, color) {
 // ---- class label lists — must match the order from gloss_to_idx / idx_to_gloss_fs
 // in training. Loaded from JSON so this file doesn't need hardcoded label arrays.
 let signClasses = null;
-// ?vocab=v2 limits a bigger sign model to an older, smaller sign list (fewer look-alike signs to confuse)
-const SIGN_VOCAB = ["v2"].includes(params.get("vocab")) ? params.get("vocab") : null;
+// v3 is limited to v2's 1,017 signs by default (fewer look-alike signs to confuse); ?vocab=all uses all 2,301
+const SIGN_VOCAB = params.get("vocab") === "all" ? null
+  : ["v2"].includes(params.get("vocab")) ? params.get("vocab") : SIGN_MODEL_VERSION === "v3" ? "v2" : null;
 let signVocabMask = null;
 let fingerspellClasses = null;
 let letterIdx = null; // indexes of the 26 real letters (drops Kaggle's "del"/"space", which aren't ASL)
