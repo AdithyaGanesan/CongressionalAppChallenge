@@ -3,6 +3,21 @@
 The video shows the version on `main` (submitted before Oct 26, 2026). Everything below was built
 afterwards on the `next` branch. Numbers are measured on signers the models never saw in training.
 
+## 2026-11-25: diagrams built from what was signed
+
+- New `sentence_diagram.js`: reads each translated line and draws a diagram when it has structure. Works
+  with ASL word order ("GAME CANCEL WHY RAIN") and English ("the game was canceled because it rained").
+  - steps (FIRST / THEN / NEXT / FINISH, before / after) -> flowchart; one step per line grows the same chart
+  - IF / THEN / OTHERWISE -> decision diamond with Yes / No
+  - CAUSE / BECAUSE / WHY / RESULT / MAKE / BECOME -> cause and effect
+  - EQUAL / SAME with plus / times / divide -> formula
+  - bigger / smaller than, or SUN BIG EARTH SMALL -> comparison
+  - HAVE / include -> parts of a whole; MEAN -> definition
+- Hand-written topic diagrams (calibration, torque, velocity) still win when their word comes up.
+- No AI and no server: fixed word patterns, so it is fast on phones and never makes up content.
+  Recognized words are reduced to letters, digits and spaces before drawing (no code injection).
+- `node tools/diagram_test.mjs`: 28 checks. Turn off with `?autodiagram=0`.
+
 ## 2026-11-24: best models are now the default
 
 - The app now uses sign model v3 (limited to v2's 1,017 signs) and fingerspelling v3 with no URL settings.

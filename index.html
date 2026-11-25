@@ -213,6 +213,7 @@
 </div>
 
 <script type="module">
+import { DiagramSession, toMermaid } from "./sentence_diagram.js";
 import {
   HandLandmarker,
   PoseLandmarker,
@@ -1445,16 +1446,29 @@ function loadMermaid() {
 }
 
 let shownTopic = null;
+// Diagrams built from what was signed (sentence_diagram.js): steps, if/then, cause and effect, formulas,
+// comparisons, parts. A hand-written topic diagram wins when one matches. ?autodiagram=0 turns this off.
+const AUTO_DIAGRAM = params.get("autodiagram") !== "0";
+const diagramSession = new DiagramSession(20000);
 async function maybeShowDiagram(tokens) {
   const words = tokens.filter(t => t !== "?").map(asWord);
   const topic = topics.find(tp => tp.keywords.some(k => words.includes(k)));
-  if (!topic || (topic.id === shownTopic && diagramEl.classList.contains("shown"))) return;
+  let src, title, id;
+  if (topic) {
+    if (topic.id === shownTopic && diagramEl.classList.contains("shown")) return;
+    // topic text is fixed content from topic_diagrams.json
+    src = Array.isArray(topic.mermaid) ? topic.mermaid.join("\n") : topic.mermaid;
+    title = topic.title; id = topic.id;
+  } else {
+    const g = AUTO_DIAGRAM && diagramSession.add(tokens, performance.now());
+    if (!g) return;
+    // recognized text reaches Mermaid only through sentence_diagram.js label(): letters, digits, spaces, + − × ÷ = '
+    src = toMermaid(g); title = g.title; id = null;
+  }
   try {
     const mermaid = await loadMermaid();
-    // topic text is fixed content from topic_diagrams.json; recognized text never goes into Mermaid source
-    const src = Array.isArray(topic.mermaid) ? topic.mermaid.join("\n") : topic.mermaid;
     const { svg } = await mermaid.render(`dg${++diagramCount}`, src);
-    document.getElementById("diagramTitle").textContent = topic.title;
+    document.getElementById("diagramTitle").textContent = title;
     const body = document.getElementById("diagramBody");
     body.innerHTML = svg;
     // tap a step to highlight it
@@ -1463,7 +1477,7 @@ async function maybeShowDiagram(tokens) {
       body.querySelectorAll(".node.hl").forEach(x => x.classList.remove("hl"));
       if (on) n.classList.add("hl");
     }));
-    shownTopic = topic.id;
+    shownTopic = id;
     diagramEl.classList.add("shown");
     diagramEl.scrollTop = 0;
   } catch (e) {
@@ -1676,6 +1690,7 @@ speakBtn.addEventListener("click", () => {
 document.getElementById("clearBtn").addEventListener("click", () => {
   transcript.length = 0;
   shownTopic = null;
+  diagramSession.reset();
   renderTranscript();
   diagramEl.classList.remove("shown");
 });
